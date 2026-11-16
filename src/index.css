@@ -1,0 +1,621 @@
+const STORAGE_KEYS = {
+  budget: 'bizim_butce_budget',
+  transactions: 'bizim_butce_transactions',
+  bills: 'bizim_butce_bills',
+  theme: 'bizim_butce_theme'
+};
+
+const tone = {
+  expenses: [
+    { id: 'market', label: 'Market & Gıda', icon: 'Bag', color: 'emerald' },
+    { id: 'kira', label: 'Kira & Aidat', icon: 'Building', color: 'indigo' },
+    { id: 'fatura', label: 'Faturalar', icon: 'Zap', color: 'amber' },
+    { id: 'ulasim', label: 'Ulaşım', icon: 'Car', color: 'sky' },
+    { id: 'borc', label: 'Borç & Kredi', icon: 'CreditCard', color: 'rose' },
+    { id: 'yeme_icme', label: 'Yeme-İçme', icon: 'Utensils', color: 'orange' },
+    { id: 'saglik', label: 'Sağlık', icon: 'Heart', color: 'red' },
+    { id: 'giyim', label: 'Giyim', icon: 'Shirt', color: 'purple' },
+    { id: 'diger_gider', label: 'Diğer', icon: 'More', color: 'slate' }
+  ],
+  incomes: [
+    { id: 'maas', label: 'Maaş', icon: 'Briefcase', color: 'emerald' },
+    { id: 'ek_gelir', label: 'Ek Gelir', icon: 'Coins', color: 'teal' },
+    { id: 'yatirim', label: 'Yatırım', icon: 'Piggy', color: 'blue' },
+    { id: 'diger_gelir', label: 'Diğer', icon: 'More', color: 'slate' }
+  ]
+};
+
+const defaultBudget = {
+  name: 'Bizim Aile Bütçemiz',
+  carryover: true,
+  members: [
+    { name: 'Aile Üyesi', role: 'Yönetici' },
+    { name: 'Eş', role: 'Ortak' },
+    { name: 'Çocuk', role: 'Gözlemci' }
+  ]
+};
+
+const demoTransactions = [
+  { id: 'tx-1', type: 'income', category: 'maas', amount: 18500, description: 'Aylık maaş', date: '2026-11-01' },
+  { id: 'tx-2', type: 'expense', category: 'market', amount: 2600, description: 'Market alışverişi', date: '2026-11-06' },
+  { id: 'tx-3', type: 'expense', category: 'kira', amount: 7700, description: 'Kira ödemesi', date: '2026-11-08' },
+  { id: 'tx-4', type: 'expense', category: 'ulasim', amount: 1200, description: 'Yakıt', date: '2026-11-12' },
+  { id: 'tx-5', type: 'income', category: 'ek_gelir', amount: 900, description: 'Kısa süreli ek gelir', date: '2026-11-14' }
+];
+
+const demoBills = [
+  { id: 'bill-1', title: 'Elektrik', category: 'elektrik_su_gaz', amount: 1500, dueDate: '2026-11-18', recurring: true, status: 'pending' },
+  { id: 'bill-2', title: 'İnternet', category: 'internet_tel', amount: 550, dueDate: '2026-11-22', recurring: true, status: 'pending' },
+  { id: 'bill-3', title: 'Kredi kartı', category: 'kredi_karti', amount: 2200, dueDate: '2026-11-24', recurring: true, status: 'pending' }
+];
+
+const readStorage = (key, fallback) => {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const writeStorage = (key, value) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // ignore
+  }
+};
+
+const formatCurrency = (amount) =>
+  new Intl.NumberFormat('tr-TR', {
+    style: 'currency',
+    currency: 'TRY',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(Number(amount || 0));
+
+const getCurrentMonthKey = () => new Date().toISOString().slice(0, 7);
+
+const getMonthLabel = (monthKey) => {
+  const [year, month] = monthKey.split('-');
+  const months = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+  return `${months[Number(month) - 1] || month} ${year}`;
+};
+
+const getCategoryMeta = (type, categoryId) => {
+  const list = type === 'income' ? tone.incomes : tone.expenses;
+  return (
+    list.find((item) => item.id === categoryId) || {
+      id: categoryId,
+      label: 'Diğer',
+      color: 'slate'
+    }
+  );
+};
+
+const getTodayISO = () => new Date().toISOString().slice(0, 10);
+
+const generateId = () => `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+export default function App() {
+  const [darkMode, setDarkMode] = useState(() => {
+    const stored = readStorage(STORAGE_KEYS.theme, null);
+    if (stored !== null) return Boolean(stored);
+    return true;
+  });
+
+  const [budget, setBudget] = useState(() => readStorage(STORAGE_KEYS.budget, defaultBudget));
+  const [transactions, setTransactions] = useState(() => readStorage(STORAGE_KEYS.transactions, demoTransactions));
+  const [bills, setBills] = useState(() => readStorage(STORAGE_KEYS.bills, demoBills));
+  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthKey());
+  const [activeTab, setActiveTab] = useState('home');
+  const [toast, setToast] = useState(null);
+  const [editingTx, setEditingTx] = useState(null);
+  const [txForm, setTxForm] = useState({
+    type: 'expense',
+    category: 'market',
+    amount: '',
+    description: '',
+    date: getTodayISO()
+  });
+  const [billForm, setBillForm] = useState({
+    title: '',
+    category: 'elektrik_su_gaz',
+    amount: '',
+    dueDate: getTodayISO(),
+    recurring: true
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
+    writeStorage(STORAGE_KEYS.theme, darkMode);
+  }, [darkMode]);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.budget, budget);
+  }, [budget]);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.transactions, transactions);
+  }, [transactions]);
+
+  useEffect(() => {
+    writeStorage(STORAGE_KEYS.bills, bills);
+  }, [bills]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  const summary = useMemo(() => {
+    const current = transactions.filter((tx) => (tx.date || '').startsWith(selectedMonth));
+
+    const income = current.filter((tx) => tx.type === 'income').reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+    const expense = current.filter((tx) => tx.type === 'expense').reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+
+    const previousMonths = transactions.filter((tx) => {
+      const month = (tx.date || '').slice(0, 7);
+      return month && month < selectedMonth;
+    });
+
+    const prevIncome = previousMonths.filter((tx) => tx.type === 'income').reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+    const prevExpense = previousMonths.filter((tx) => tx.type === 'expense').reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+    const carryover = budget.carryover ? prevIncome - prevExpense : 0;
+
+    const categoryBreakdown = Object.entries(
+      current
+        .filter((tx) => tx.type === 'expense')
+        .reduce((acc, tx) => {
+          const key = tx.category || 'diger_gider';
+          acc[key] = (acc[key] || 0) + Number(tx.amount || 0);
+          return acc;
+        }, {})
+    )
+      .map(([category, total]) => ({ ...getCategoryMeta('expense', category), total }))
+      .sort((a, b) => b.total - a.total);
+
+    return {
+      income,
+      expense,
+      net: income - expense,
+      carryover,
+      remaining: carryover + income - expense,
+      categoryBreakdown
+    };
+  }, [transactions, selectedMonth, budget.carryover]);
+
+  const upcomingBills = useMemo(() => bills.filter((bill) => bill.status === 'pending').sort((a, b) => a.dueDate.localeCompare(b.dueDate)), [bills]);
+
+  const monthTransactions = useMemo(
+    () => transactions.filter((tx) => (tx.date || '').startsWith(selectedMonth)).sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [transactions, selectedMonth]
+  );
+
+  const shiftMonth = (dir) => {
+    const [year, month] = selectedMonth.split('-').map(Number);
+    const next = new Date(year, month - 1 + dir, 1);
+    const newKey = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+    setSelectedMonth(newKey);
+  };
+
+  const resetTxForm = () => {
+    setTxForm({
+      type: 'expense',
+      category: 'market',
+      amount: '',
+      description: '',
+      date: getTodayISO()
+    });
+    setEditingTx(null);
+  };
+
+  const handleTxSubmit = (event) => {
+    event.preventDefault();
+    const amount = Number(String(txForm.amount).replace(',', '.'));
+    if (!txForm.description.trim() || !amount || amount <= 0) {
+      setToast('Lütfen geçerli tutar ve açıklama girin.');
+      return;
+    }
+
+    const item = {
+      id: editingTx ? editingTx.id : generateId(),
+      type: txForm.type,
+      category: txForm.category,
+      amount,
+      description: txForm.description.trim(),
+      date: txForm.date || getTodayISO()
+    };
+
+    setTransactions((prev) => {
+      if (editingTx) {
+        return prev.map((tx) => (tx.id === editingTx.id ? item : tx));
+      }
+      return [item, ...prev];
+    });
+
+    setSelectedMonth((txForm.date || getTodayISO()).slice(0, 7));
+    resetTxForm();
+    setToast(editingTx ? 'İşlem güncellendi.' : 'İşlem eklendi.');
+  };
+
+  const handleEditTx = (tx) => {
+    setEditingTx(tx);
+    setTxForm({
+      type: tx.type,
+      category: tx.category,
+      amount: String(tx.amount),
+      description: tx.description,
+      date: tx.date
+    });
+    setActiveTab('add');
+  };
+
+  const handleDeleteTx = (txId) => {
+    setTransactions((prev) => prev.filter((item) => item.id !== txId));
+    setToast('İşlem silindi.');
+  };
+
+  const handleBillSubmit = (event) => {
+    event.preventDefault();
+    const amount = Number(String(billForm.amount).replace(',', '.'));
+    if (!billForm.title.trim() || !amount || amount <= 0) {
+      setToast('Ödeme bilgilerini kontrol edin.');
+      return;
+    }
+
+    const bill = {
+      id: generateId(),
+      title: billForm.title.trim(),
+      category: billForm.category,
+      amount,
+      dueDate: billForm.dueDate,
+      recurring: Boolean(billForm.recurring),
+      status: 'pending'
+    };
+
+    setBills((prev) => [bill, ...prev]);
+    setBillForm({
+      title: '',
+      category: 'elektrik_su_gaz',
+      amount: '',
+      dueDate: getTodayISO(),
+      recurring: true
+    });
+    setToast('Ödeme kaydı eklendi.');
+  };
+
+  const handlePayBill = (billId) => {
+    setBills((prev) =>
+      prev.map((bill) =>
+        bill.id === billId
+          ? {
+              ...bill,
+              status: 'paid',
+              paidDate: getTodayISO()
+            }
+          : bill
+      )
+    );
+
+    const bill = bills.find((entry) => entry.id === billId);
+    if (bill) {
+      const newExpense = {
+        id: generateId(),
+        type: 'expense',
+        category: bill.category === 'kira' ? 'kira' : bill.category === 'kredi_karti' ? 'borc' : 'fatura',
+        amount: Number(bill.amount),
+        description: `${bill.title} (Ödeme)`,
+        date: getTodayISO()
+      };
+      setTransactions((prev) => [newExpense, ...prev]);
+    }
+
+    setToast('Ödeme tamamlandı.');
+  };
+
+  return (
+    <div className="app-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Aile bütçesi</p>
+          <h1>{budget.name}</h1>
+        </div>
+        <div className="header-actions">
+          <button className="icon-button" onClick={() => setDarkMode((v) => !v)} aria-label="Tema değiştir">
+            {darkMode ? <SunIcon /> : <MoonIcon />}
+          </button>
+          <button className="primary-button" onClick={() => setActiveTab('add')}>+ Yeni kayıt</button>
+        </div>
+      </header>
+
+      <nav className="tabbar">
+        <button className={activeTab === 'home' ? 'tab active' : 'tab'} onClick={() => setActiveTab('home')}>
+          <HomeIcon /> Anasayfa
+        </button>
+        <button className={activeTab === 'add' ? 'tab active' : 'tab'} onClick={() => setActiveTab('add')}>
+          <PlusIcon /> Kayıt Ekle
+        </button>
+        <button className={activeTab === 'bills' ? 'tab active' : 'tab'} onClick={() => setActiveTab('bills')}>
+          <CalendarClockIcon /> Ödemeler
+        </button>
+      </nav>
+
+      <main className="content-grid">
+        <section className="panel hero-panel">
+          <div className="month-nav">
+            <button className="arrow-button" onClick={() => shiftMonth(-1)}><ChevronLeftIcon /></button>
+            <div>
+              <small>Seçili dönem</small>
+              <strong>{getMonthLabel(selectedMonth)}</strong>
+            </div>
+            <button className="arrow-button" onClick={() => shiftMonth(1)}><ChevronRightIcon /></button>
+          </div>
+
+          <div className="stats-grid">
+            <div className="stat-card success">
+              <span>Gelir</span>
+              <strong>{formatCurrency(summary.income)}</strong>
+            </div>
+            <div className="stat-card danger">
+              <span>Gider</span>
+              <strong>{formatCurrency(summary.expense)}</strong>
+            </div>
+            <div className="stat-card neutral">
+              <span>Kalan</span>
+              <strong>{formatCurrency(summary.remaining)}</strong>
+            </div>
+          </div>
+
+          <div className="mini-details">
+            <div>
+              <span>Taşıma</span>
+              <strong>{formatCurrency(summary.carryover)}</strong>
+            </div>
+            <div>
+              <span>Bu ay net</span>
+              <strong>{formatCurrency(summary.net)}</strong>
+            </div>
+            <div>
+              <span>Üyeler</span>
+              <strong>{budget.members.length}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel family-panel">
+          <div className="section-header">
+            <h3>Ortak aile bütçesi</h3>
+            <button className="soft-button" onClick={() => setBudget((prev) => ({ ...prev, carryover: !prev.carryover }))}>
+              {budget.carryover ? 'Devri açık' : 'Devri kapalı'}
+            </button>
+          </div>
+
+          <div className="member-list">
+            {budget.members.map((member, index) => (
+              <div key={`${member.name}-${index}`} className="member-item">
+                <div className="avatar">{member.name.charAt(0).toUpperCase()}</div>
+                <div>
+                  <strong>{member.name}</strong>
+                  <small>{member.role}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {activeTab === 'add' && (
+          <section className="panel form-panel">
+            <div className="section-header">
+              <h3>{editingTx ? 'İşlem güncelle' : 'Yeni kayıt'}</h3>
+              {editingTx && <button className="soft-button" onClick={resetTxForm}>İptal</button>}
+            </div>
+            <form onSubmit={handleTxSubmit} className="form-grid">
+              <div className="field-row">
+                <label>
+                  Tür
+                  <select value={txForm.type} onChange={(e) => setTxForm((prev) => ({ ...prev, type: e.target.value, category: e.target.value === 'income' ? 'maas' : 'market' }))}>
+                    <option value="expense">Gider</option>
+                    <option value="income">Gelir</option>
+                  </select>
+                </label>
+                <label>
+                  Kategori
+                  <select value={txForm.category} onChange={(e) => setTxForm((prev) => ({ ...prev, category: e.target.value }))}>
+                    {(txForm.type === 'income' ? tone.incomes : tone.expenses).map((item) => (
+                      <option key={item.id} value={item.id}>{item.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="field-row">
+                <label>
+                  Tutar
+                  <input type="number" value={txForm.amount} onChange={(e) => setTxForm((prev) => ({ ...prev, amount: e.target.value }))} min="0.01" step="0.01" placeholder="0.00" />
+                </label>
+                <label>
+                  Tarih
+                  <input type="date" value={txForm.date} onChange={(e) => setTxForm((prev) => ({ ...prev, date: e.target.value }))} />
+                </label>
+              </div>
+                <label>
+                  Açıklama
+                  <input type="text" value={txForm.description} onChange={(e) => setTxForm((prev) => ({ ...prev, description: e.target.value }))} placeholder="Ör. Market alışverişi" />
+                </label>
+              <button className="primary-button full" type="submit">{editingTx ? 'Güncelle' : 'Kayıt ekle'}</button>
+            </form>
+          </section>
+        )}
+
+        {activeTab === 'bills' && (
+          <section className="panel form-panel">
+            <div className="section-header">
+              <h3>Planlı ödemeler</h3>
+            </div>
+            <form onSubmit={handleBillSubmit} className="form-grid">
+              <div className="field-row">
+                <label>
+                  Başlık
+                  <input type="text" value={billForm.title} onChange={(e) => setBillForm((prev) => ({ ...prev, title: e.target.value }))} placeholder="Elektrik faturası, kira, ..." />
+                </label>
+                <label>
+                  Kategori
+                  <select value={billForm.category} onChange={(e) => setBillForm((prev) => ({ ...prev, category: e.target.value }))}>
+                    <option value="kira">Kira & Aidat</option>
+                    <option value="elektrik_su_gaz">Elektrik / Su / Doğalgaz</option>
+                    <option value="internet_tel">İnternet & Telefon</option>
+                    <option value="kredi_taksit">Kredi Taksiti</option>
+                    <option value="kredi_karti">Kredi Kartı Borcu</option>
+                    <option value="sigorta">Sigorta</option>
+                    <option value="diger_odeme">Diğer Ödeme</option>
+                  </select>
+                </label>
+              </div>
+              <div className="field-row">
+                <label>
+                  Tutar
+                  <input type="number" value={billForm.amount} onChange={(e) => setBillForm((prev) => ({ ...prev, amount: e.target.value }))} min="0.01" step="0.01" />
+                </label>
+                <label>
+                  Son ödeme tarihi
+                  <input type="date" value={billForm.dueDate} onChange={(e) => setBillForm((prev) => ({ ...prev, dueDate: e.target.value }))} />
+                </label>
+              </div>
+              <label className="checkbox-row">
+                <input type="checkbox" checked={billForm.recurring} onChange={(e) => setBillForm((prev) => ({ ...prev, recurring: e.target.checked }))} />
+                Tekrarlı ödeme
+              </label>
+              <button className="primary-button full" type="submit">Ödeme ekle</button>
+            </form>
+          </section>
+        )}
+
+        <section className="panel table-panel">
+          <div className="section-header">
+            <h3>Bu ayın hareketleri</h3>
+            <span>{monthTransactions.length} kayıt</span>
+          </div>
+          <div className="list-container">
+            {monthTransactions.length === 0 ? (
+              <div className="empty-state">Bu ay için kayıt yok. İlk işlemi ekleyin.</div>
+            ) : (
+              monthTransactions.map((tx) => {
+                const meta = getCategoryMeta(tx.type, tx.category);
+                const Icon = iconMap[meta.icon] || WalletIcon;
+                return (
+                  <div key={tx.id} className="tx-row">
+                    <div className={`icon-wrap ${meta.color}`}><Icon /></div>
+                    <div className="tx-main">
+                      <strong>{tx.description}</strong>
+                      <small>{meta.label} • {tx.date}</small>
+                    </div>
+                    <div className={`amount ${tx.type === 'income' ? 'pos' : 'neg'}`}>
+                      {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
+                    </div>
+                    <div className="row-actions">
+                      <button className="mini-button" onClick={() => handleEditTx(tx)}><PencilIcon /></button>
+                      <button className="mini-button danger" onClick={() => handleDeleteTx(tx.id)}><TrashIcon /></button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        <section className="panel table-panel">
+          <div className="section-header">
+            <h3>Ödemeler</h3>
+            <span>{upcomingBills.length} bekleyen</span>
+          </div>
+          <div className="list-container">
+            {upcomingBills.length === 0 ? (
+              <div className="empty-state">Bekleyen ödeme yok.</div>
+            ) : (
+              upcomingBills.map((bill) => (
+                <div key={bill.id} className="tx-row bill-row">
+                  <div className="icon-wrap amber"><CalendarClockIcon /></div>
+                  <div className="tx-main">
+                    <strong>{bill.title}</strong>
+                    <small>{bill.category} • {bill.dueDate}</small>
+                  </div>
+                  <div className="amount neg">{formatCurrency(bill.amount)}</div>
+                  <div className="row-actions">
+                    <button className="mini-button ok" onClick={() => handlePayBill(bill.id)}><CheckIcon /></button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="panel category-panel">
+          <div className="section-header">
+            <h3>Gider dağılımı</h3>
+          </div>
+          <div className="category-list">
+            {summary.categoryBreakdown.length === 0 ? (
+              <div className="empty-state">Bu ay gider yok.</div>
+            ) : (
+              summary.categoryBreakdown.map((item) => (
+                <div key={item.id} className="category-item">
+                  <div className="category-label">
+                    <span className={`dot ${item.color}`}></span>
+                    <span>{item.label}</span>
+                  </div>
+                  <strong>{formatCurrency(item.total)}</strong>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      </main>
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+const iconMap = {
+  Bag: ShoppingBagIcon,
+  Building: BuildingIcon,
+  Zap: ZapIcon,
+  Car: CarIcon,
+  CreditCard: CreditCardIcon,
+  Utensils: UtensilsIcon,
+  Heart: HeartIcon,
+  Shirt: ShirtIcon,
+  More: MoreIcon,
+  Briefcase: BriefcaseIcon,
+  Coins: CoinsIcon,
+  Piggy: PiggyIcon,
+  Wallet: WalletIcon
+};
+
+function HomeIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function PlusIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>; }
+function CalendarClockIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1Zm6 9h4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function SunIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>; }
+function MoonIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12.5A7.5 7.5 0 0 1 11.5 4a7.5 7.5 0 1 0 8.5 8.5Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function ChevronLeftIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function ChevronRightIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function ShoppingBagIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8h12l-1 11H7L6 8Zm3-2a3 3 0 0 1 6 0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function BuildingIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V6a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v14M8 20v-4h8v4M8 8h2M14 8h2M8 12h2M14 12h2" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function ZapIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 13h6l-1 9 9-11h-6l1-9Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function CarIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15h14l-1.2-5.2A2 2 0 0 0 15.9 8H8.1a2 2 0 0 0-1.9 1.8L5 15Zm1 0v2m12-2v2M7 19a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Zm10 0a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function CreditCardIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M2 10h20" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>; }
+function UtensilsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3v7M10 3v7M7 10v11M14 3v18M18 3v8a3 3 0 0 1-6 0V3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function HeartIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.35-9-8.2C1.4 8.88 3.08 5 7.1 5c2.17 0 3.3 1.23 4.9 2.81C13.6 6.23 14.73 5 16.9 5c4.02 0 5.7 3.88 4.1 6.8-2 3.86-9 8.2-9 8.2Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function ShirtIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5 9 3h6l2 2 3 4-3 2v9H7v-9L4 9l3-4Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function MoreIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8" fill="currentColor" /><circle cx="12" cy="12" r="1.8" fill="currentColor" /><circle cx="19" cy="12" r="1.8" fill="currentColor" /></svg>; }
+function BriefcaseIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9Zm4-3h8l1 3H7l1-3Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function CoinsIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="M12 8v8M9 10.5c0-1.4 1.3-2.5 3-2.5s3 1.1 3 2.5-1.3 2.5-3 2.5-3 1.1-3 2.5 1.3 2.5 3 2.5 3-1.1 3-2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>; }
+function PiggyIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18V8.5A2.5 2.5 0 0 1 8.5 6H17a3 3 0 0 1 3 3v1.5a2.5 2.5 0 0 1-2.5 2.5H16V15a3 3 0 0 1-3 3H6Zm0 0h11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><path d="M9 10h.01M13 10h.01" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>; }
+function WalletIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v9A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-9Zm0 0h16M8 12h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function PencilIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10.5-10.5a2.12 2.12 0 1 0-3-3L5 17v3Z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><path d="m13.5 6.5 4 4" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>; }
+function TrashIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 12h8l1-12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+function CheckIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4 10-10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>; }
+
