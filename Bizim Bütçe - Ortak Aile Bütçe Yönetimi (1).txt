@@ -1,0 +1,3095 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import {
+  getAuth,
+  signInAnonymously,
+  signInWithCustomToken,
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup,
+  linkWithPopup,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  updateProfile,
+  signOut
+} from 'firebase/auth';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  collection
+} from 'firebase/firestore';
+import {
+  Home,
+  CalendarClock,
+  PlusCircle,
+  History,
+  Wallet,
+  TrendingUp,
+  TrendingDown,
+  Users,
+  Sun,
+  Moon,
+  ChevronLeft,
+  ChevronRight,
+  CheckCircle2,
+  Clock,
+  Pencil,
+  Trash2,
+  Copy,
+  Check,
+  Search,
+  ArrowRightLeft,
+  ShieldCheck,
+  Sparkles,
+  LogOut,
+  LogIn,
+  UserPlus,
+  AlertCircle,
+  X,
+  Repeat,
+  Building2,
+  ShoppingBag,
+  Zap,
+  Car,
+  HeartPulse,
+  Utensils,
+  Shirt,
+  CreditCard,
+  Briefcase,
+  Coins,
+  PiggyBank,
+  MoreHorizontal,
+  Download,
+  Upload,
+  Cloud,
+  Smartphone
+} from 'lucide-react';
+
+// ============================================================================
+// 1. GÜVENLİ FIREBASE YAPILANDIRMASI VE BAŞLATMA
+// ============================================================================
+let app = null;
+let auth = null;
+let db = null;
+let firebaseEnabled = false;
+
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'bizim-butce-app';
+
+try {
+  const hasConfig =
+    typeof __firebase_config !== 'undefined' &&
+    __firebase_config &&
+    __firebase_config !== '{}';
+
+  const firebaseConfig = hasConfig
+    ? JSON.parse(__firebase_config)
+    : {
+        apiKey: 'demo-api-key',
+        authDomain: 'demo.firebaseapp.com',
+        projectId: 'demo-project'
+      };
+
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  firebaseEnabled = Boolean(hasConfig && firebaseConfig.apiKey !== 'demo-api-key');
+} catch (err) {
+  console.warn('Firebase başlatılamadı, çevrimdışı mod devrede:', err);
+  firebaseEnabled = false;
+}
+
+// ============================================================================
+// 2. SABİTLER, KATEGORİLER VE YARDIMCI FONKSİYONLAR
+// ============================================================================
+const STORAGE_KEYS = {
+  PROFILE: 'bizim_butce_profile_v2',
+  BUDGET: 'bizim_butce_info_v2',
+  TRANSACTIONS: 'bizim_butce_tx_v2',
+  BILLS: 'bizim_butce_bills_v2',
+  THEME: 'bizim_butce_theme_v2'
+};
+
+const safeReadStorage = (key, fallback) => {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const safeWriteStorage = (key, value) => {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Depolama dolu veya kısıtlı ise sessizce geç
+  }
+};
+
+const TURKISH_MONTHS = [
+  'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',
+  'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'
+];
+
+const EXPENSE_CATEGORIES = [
+  { id: 'market', label: 'Market & Gıda', icon: ShoppingBag, color: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' },
+  { id: 'kira', label: 'Kira & Aidat', icon: Building2, color: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-400' },
+  { id: 'fatura', label: 'Faturalar', icon: Zap, color: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
+  { id: 'ulasim', label: 'Ulaşım & Yakıt', icon: Car, color: 'bg-sky-500/15 text-sky-600 dark:text-sky-400' },
+  { id: 'borc', label: 'Borç & Kredi', icon: CreditCard, color: 'bg-rose-500/15 text-rose-600 dark:text-rose-400' },
+  { id: 'yeme_icme', label: 'Eğlence & Yeme-İçme', icon: Utensils, color: 'bg-orange-500/15 text-orange-600 dark:text-orange-400' },
+  { id: 'saglik', label: 'Sağlık', icon: HeartPulse, color: 'bg-red-500/15 text-red-600 dark:text-red-400' },
+  { id: 'giyim', label: 'Giyim', icon: Shirt, color: 'bg-purple-500/15 text-purple-600 dark:text-purple-400' },
+  { id: 'diger_gider', label: 'Diğer Gider', icon: MoreHorizontal, color: 'bg-slate-500/15 text-slate-600 dark:text-slate-400' }
+];
+
+const INCOME_CATEGORIES = [
+  { id: 'maas', label: 'Maaş', icon: Briefcase, color: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' },
+  { id: 'ek_gelir', label: 'Ek Gelir', icon: Coins, color: 'bg-teal-500/15 text-teal-600 dark:text-teal-400' },
+  { id: 'yatirim', label: 'Yatırım & Kira Geliri', icon: PiggyBank, color: 'bg-blue-500/15 text-blue-600 dark:text-blue-400' },
+  { id: 'diger_gelir', label: 'Diğer Gelir', icon: MoreHorizontal, color: 'bg-slate-500/15 text-slate-600 dark:text-slate-400' }
+];
+
+const BILL_CATEGORIES = [
+  { id: 'kira', label: 'Kira & Aidat' },
+  { id: 'elektrik_su_gaz', label: 'Elektrik / Su / Doğalgaz' },
+  { id: 'internet_tel', label: 'İnternet & Telefon' },
+  { id: 'kredi_taksit', label: 'Kredi Taksiti' },
+  { id: 'kredi_karti', label: 'Kredi Kartı Borcu' },
+  { id: 'sigorta', label: 'Sigorta & Vergi' },
+  { id: 'diger_odeme', label: 'Diğer Ödeme' }
+];
+
+const formatCurrency = (amount) => {
+  const num = Number(amount) || 0;
+  return new Intl.NumberFormat('tr-TR', {
+    style: 'currency',
+    currency: 'TRY',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(num);
+};
+
+const getTodayISO = () => {
+  const now = new Date();
+  const offset = now.getTimezoneOffset() * 60000;
+  return new Date(now.getTime() - offset).toISOString().split('T')[0];
+};
+
+const getCurrentMonthKey = () => getTodayISO().slice(0, 7);
+
+const formatMonthLabel = (monthKey) => {
+  if (!monthKey || !monthKey.includes('-')) return '';
+  const [year, month] = monthKey.split('-');
+  const monthIdx = parseInt(month, 10) - 1;
+  return `${TURKISH_MONTHS[monthIdx] || ''} ${year}`;
+};
+
+const shiftMonthKey = (monthKey, delta) => {
+  const [yearStr, monthStr] = monthKey.split('-');
+  const date = new Date(parseInt(yearStr, 10), parseInt(monthStr, 10) - 1 + delta, 1);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  return `${y}-${m}`;
+};
+
+const addOneMonthToDate = (dateStr) => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const next = new Date(y, m, d);
+  const ny = next.getFullYear();
+  const nm = String(next.getMonth() + 1).padStart(2, '0');
+  const nd = String(Math.min(d, new Date(ny, next.getMonth() + 1, 0).getDate())).padStart(2, '0');
+  return `${ny}-${nm}-${nd}`;
+};
+
+const generateInviteCode = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+};
+
+const generateLocalId = () => `loc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+const getCategoryMeta = (type, categoryId) => {
+  const list = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+  return (
+    list.find((c) => c.id === categoryId) || {
+      id: categoryId,
+      label: categoryId || 'Genel',
+      icon: Wallet,
+      color: 'bg-slate-500/15 text-slate-600 dark:text-slate-400'
+    }
+  );
+};
+
+const createDefaultInitialData = () => {
+  const existingProfile = safeReadStorage(STORAGE_KEYS.PROFILE, null);
+  const existingBudget = safeReadStorage(STORAGE_KEYS.BUDGET, null);
+  if (existingProfile && existingBudget) {
+    return { profile: existingProfile, budget: existingBudget };
+  }
+  const budgetId = generateInviteCode();
+  const localUid = `user_${Math.random().toString(36).slice(2, 10)}`;
+  const profile = {
+    uid: localUid,
+    displayName: 'Aile Üyesi',
+    email: '',
+    photoURL: '',
+    activeBudgetId: budgetId,
+    createdAt: new Date().toISOString()
+  };
+  const budget = {
+    budgetId,
+    name: 'Bizim Aile Bütçemiz',
+    carryoverEnabled: true,
+    ownerId: localUid,
+    members: [
+      {
+        uid: localUid,
+        name: 'Aile Üyesi',
+        role: 'Yönetici',
+        joinedAt: new Date().toISOString()
+      }
+    ],
+    createdAt: new Date().toISOString()
+  };
+  safeWriteStorage(STORAGE_KEYS.PROFILE, profile);
+  safeWriteStorage(STORAGE_KEYS.BUDGET, budget);
+  return { profile, budget };
+};
+
+// ============================================================================
+// 3. ANA UYGULAMA BİLEŞENİ (APP) - ANINDA AÇILAN MİMARİ
+// ============================================================================
+export default function App() {
+  const initialDefaults = useMemo(() => createDefaultInitialData(), []);
+
+  // Tema durumu
+  const [darkMode, setDarkMode] = useState(() => {
+    const saved = safeReadStorage(STORAGE_KEYS.THEME, null);
+    if (saved !== null) return Boolean(saved);
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    safeWriteStorage(STORAGE_KEYS.THEME, darkMode);
+  }, [darkMode]);
+
+  // Kimlik doğrulama ve Bulut Bağlantı Durumu (Asla ekranı kilitlemez)
+  const [user, setUser] = useState(null);
+  const [cloudConnected, setCloudConnected] = useState(false);
+  const [userProfile, setUserProfile] = useState(initialDefaults.profile);
+
+  // Ortak Bütçe ve Veriler (Anında yerel önbellekten başlar, bulut gelince senkronize olur)
+  const [budgetInfo, setBudgetInfo] = useState(initialDefaults.budget);
+  const [transactions, setTransactions] = useState(() =>
+    safeReadStorage(STORAGE_KEYS.TRANSACTIONS, [])
+  );
+  const [bills, setBills] = useState(() => safeReadStorage(STORAGE_KEYS.BILLS, []));
+
+  // Navigasyon ve Seçili Dönem
+  const [activeTab, setActiveTab] = useState('home');
+  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthKey());
+
+  // Modallar ve Bildirimler
+  const [familyModalOpen, setFamilyModalOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [editingTx, setEditingTx] = useState(null);
+  const [confirmModal, setConfirmModal] = useState(null);
+  const [payBillModal, setPayBillModal] = useState(null);
+  const [accountConflictModal, setAccountConflictModal] = useState(null);
+  const [toast, setToast] = useState(null);
+
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type });
+  };
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 3500);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  // Yerel depolamayı her değişiklikte güncel tut (Çevrimdışı & anında açılış garantisi)
+  useEffect(() => {
+    safeWriteStorage(STORAGE_KEYS.TRANSACTIONS, transactions);
+  }, [transactions]);
+
+  useEffect(() => {
+    safeWriteStorage(STORAGE_KEYS.BILLS, bills);
+  }, [bills]);
+
+  useEffect(() => {
+    if (userProfile) safeWriteStorage(STORAGE_KEYS.PROFILE, userProfile);
+  }, [userProfile]);
+
+  useEffect(() => {
+    if (budgetInfo) safeWriteStorage(STORAGE_KEYS.BUDGET, budgetInfo);
+  }, [budgetInfo]);
+
+  // PWA Meta Etiketleri
+  useEffect(() => {
+    document.title = 'Bizim Bütçe — Ortak Aile Bütçe Yönetimi';
+    const metaTags = [
+      { name: 'apple-mobile-web-app-capable', content: 'yes' },
+      { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
+      { name: 'apple-mobile-web-app-title', content: 'Bizim Bütçe' },
+      { name: 'theme-color', content: darkMode ? '#090d16' : '#059669' }
+    ];
+    metaTags.forEach(({ name, content }) => {
+      try {
+        let tag = document.querySelector(`meta[name="${name}"]`);
+        if (!tag) {
+          tag = document.createElement('meta');
+          tag.setAttribute('name', name);
+          document.head.appendChild(tag);
+        }
+        tag.setAttribute('content', content);
+      } catch {
+        // Başlık etiketi erişimi kısıtlıysa geç
+      }
+    });
+  }, [darkMode]);
+
+  // ==========================================================================
+  // 4. ARKA PLAN FIREBASE AUTH BAŞLATMA (2 SANİYE ZAMAN AŞIMI KORUMALI)
+  // ==========================================================================
+  useEffect(() => {
+    if (!firebaseEnabled || !auth) return;
+
+    let cancelled = false;
+    const timeoutId = setTimeout(() => {
+      if (!cancelled && !auth.currentUser) {
+        console.info('Bulut kimlik doğrulaması zaman aşımına uğradı, yerel mod aktif.');
+      }
+    }, 2000);
+
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else if (!auth.currentUser) {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.warn('Arka plan bulut oturumu açılamadı, yerel mod aktif:', err?.code || err);
+      }
+    };
+    initAuth();
+
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        if (cancelled) return;
+        setUser(currentUser);
+        setCloudConnected(Boolean(currentUser));
+      });
+    } catch (err) {
+      console.warn('Auth dinleyici hatası:', err);
+    }
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+      unsubscribe();
+    };
+  }, []);
+
+  // ==========================================================================
+  // 5. BULUT PROFİL VE ORTAK BÜTÇE SENKRONİZASYONU (NON-BLOCKING)
+  // ==========================================================================
+  useEffect(() => {
+    if (!firebaseEnabled || !db || !user) return;
+
+    let unsubProfile = () => {};
+    try {
+      const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'main');
+      unsubProfile = onSnapshot(
+        profileRef,
+        async (snap) => {
+          try {
+            if (snap.exists()) {
+              const cloudData = snap.data();
+              setUserProfile((prev) => ({
+                ...prev,
+                ...cloudData,
+                uid: user.uid
+              }));
+            } else {
+              // Mevcut yerel bütçeyi buluta kaydet
+              const currentBudgetId = userProfile?.activeBudgetId || generateInviteCode();
+              const defaultName =
+                user.displayName ||
+                userProfile?.displayName ||
+                (user.email ? user.email.split('@')[0] : 'Aile Üyesi');
+
+              const newProfile = {
+                uid: user.uid,
+                displayName: defaultName,
+                email: user.email || '',
+                photoURL: user.photoURL || '',
+                activeBudgetId: currentBudgetId,
+                updatedAt: new Date().toISOString(),
+                createdAt: new Date().toISOString()
+              };
+
+              const budgetRef = doc(
+                db,
+                'artifacts',
+                appId,
+                'public',
+                'data',
+                'budgets',
+                currentBudgetId
+              );
+              const budgetSnap = await getDoc(budgetRef);
+              if (!budgetSnap.exists()) {
+                await setDoc(budgetRef, {
+                  budgetId: currentBudgetId,
+                  name: budgetInfo?.name || 'Bizim Aile Bütçemiz',
+                  carryoverEnabled: budgetInfo?.carryoverEnabled !== false,
+                  ownerId: user.uid,
+                  members: [
+                    {
+                      uid: user.uid,
+                      name: defaultName,
+                      email: user.email || '',
+                      photoURL: user.photoURL || '',
+                      role: 'Yönetici',
+                      joinedAt: new Date().toISOString()
+                    }
+                  ],
+                  createdAt: new Date().toISOString()
+                });
+              }
+
+              await setDoc(profileRef, newProfile);
+              setUserProfile(newProfile);
+            }
+          } catch (innerErr) {
+            console.warn('Profil bulut eşitleme hatası:', innerErr);
+          }
+        },
+        (err) => {
+          console.warn('Profil dinleme hatası:', err);
+          setCloudConnected(false);
+        }
+      );
+    } catch (err) {
+      console.warn('Firestore profil referans hatası:', err);
+    }
+
+    return () => unsubProfile();
+  }, [user]);
+
+  // ==========================================================================
+  // 6. ORTAK BÜTÇE META VERİSİ, İŞLEMLER VE ÖDEMELER (REAL-TIME SYNC)
+  // ==========================================================================
+  const activeBudgetId = userProfile?.activeBudgetId;
+
+  useEffect(() => {
+    if (!firebaseEnabled || !db || !user || !activeBudgetId) return;
+
+    let unsubBudget = () => {};
+    let unsubTx = () => {};
+    let unsubBills = () => {};
+
+    try {
+      const budgetDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'budgets', activeBudgetId);
+      unsubBudget = onSnapshot(
+        budgetDocRef,
+        (snap) => {
+          if (snap.exists()) {
+            setBudgetInfo(snap.data());
+          }
+        },
+        (err) => console.warn('Bütçe bilgisi okuma hatası:', err)
+      );
+
+      const txColRef = collection(db, 'artifacts', appId, 'public', 'data', 'transactions');
+      unsubTx = onSnapshot(
+        txColRef,
+        (snapshot) => {
+          const cloudList = [];
+          snapshot.forEach((d) => {
+            const data = d.data();
+            if (data.budgetId === activeBudgetId) {
+              cloudList.push({ id: d.id, ...data });
+            }
+          });
+          cloudList.sort((a, b) => {
+            if (b.date !== a.date) return b.date.localeCompare(a.date);
+            return (b.createdAt || '').localeCompare(a.createdAt || '');
+          });
+          if (cloudList.length > 0 || transactions.length === 0) {
+            setTransactions(cloudList);
+          }
+        },
+        (err) => console.warn('İşlemler okuma hatası:', err)
+      );
+
+      const billsColRef = collection(db, 'artifacts', appId, 'public', 'data', 'bills');
+      unsubBills = onSnapshot(
+        billsColRef,
+        (snapshot) => {
+          const cloudBills = [];
+          snapshot.forEach((d) => {
+            const data = d.data();
+            if (data.budgetId === activeBudgetId) {
+              cloudBills.push({ id: d.id, ...data });
+            }
+          });
+          cloudBills.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+          if (cloudBills.length > 0 || bills.length === 0) {
+            setBills(cloudBills);
+          }
+        },
+        (err) => console.warn('Ödemeler okuma hatası:', err)
+      );
+    } catch (err) {
+      console.warn('Firestore dinleyici kurulum hatası:', err);
+    }
+
+    return () => {
+      unsubBudget();
+      unsubTx();
+      unsubBills();
+    };
+  }, [user, activeBudgetId]);
+
+  // ==========================================================================
+  // 7. FİNANSAL HESAPLAMA MOTORU (BAĞIMSIZ GELİR/GİDER & DEVREDEN BAKİYE)
+  // ==========================================================================
+  const financialSummary = useMemo(() => {
+    const carryoverEnabled = budgetInfo?.carryoverEnabled !== false;
+    const monthTransactions = transactions.filter((t) => (t.date || '').startsWith(selectedMonth));
+
+    const monthlyIncome = monthTransactions
+      .filter((t) => t.type === 'income')
+      .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+
+    const monthlyExpense = monthTransactions
+      .filter((t) => t.type === 'expense')
+      .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+
+    const previousTransactions = transactions.filter((t) => {
+      const mKey = (t.date || '').slice(0, 7);
+      return mKey && mKey < selectedMonth;
+    });
+
+    const prevIncome = previousTransactions
+      .filter((t) => t.type === 'income')
+      .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+
+    const prevExpense = previousTransactions
+      .filter((t) => t.type === 'expense')
+      .reduce((acc, t) => acc + (Number(t.amount) || 0), 0);
+
+    const rawCarryover = prevIncome - prevExpense;
+    const effectiveCarryover = carryoverEnabled ? rawCarryover : 0;
+
+    const netThisMonth = monthlyIncome - monthlyExpense;
+    const remainingCash = effectiveCarryover + netThisMonth;
+
+    const expenseByCategoryMap = {};
+    monthTransactions
+      .filter((t) => t.type === 'expense')
+      .forEach((t) => {
+        const cat = t.category || 'diger_gider';
+        expenseByCategoryMap[cat] = (expenseByCategoryMap[cat] || 0) + (Number(t.amount) || 0);
+      });
+
+    const categoryBreakdown = Object.entries(expenseByCategoryMap)
+      .map(([catId, total]) => ({
+        ...getCategoryMeta('expense', catId),
+        total,
+        percentage: monthlyExpense > 0 ? Math.round((total / monthlyExpense) * 100) : 0
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    return {
+      monthTransactions,
+      monthlyIncome,
+      monthlyExpense,
+      netThisMonth,
+      rawCarryover,
+      effectiveCarryover,
+      carryoverEnabled,
+      remainingCash,
+      categoryBreakdown
+    };
+  }, [transactions, selectedMonth, budgetInfo]);
+
+  const monthlyArchives = useMemo(() => {
+    const map = {};
+    map[getCurrentMonthKey()] = { monthKey: getCurrentMonthKey(), income: 0, expense: 0, count: 0 };
+    map[selectedMonth] = { monthKey: selectedMonth, income: 0, expense: 0, count: 0 };
+
+    transactions.forEach((t) => {
+      const mKey = (t.date || '').slice(0, 7);
+      if (!mKey) return;
+      if (!map[mKey]) {
+        map[mKey] = { monthKey: mKey, income: 0, expense: 0, count: 0 };
+      }
+      const amt = Number(t.amount) || 0;
+      if (t.type === 'income') map[mKey].income += amt;
+      else if (t.type === 'expense') map[mKey].expense += amt;
+      map[mKey].count += 1;
+    });
+
+    return Object.values(map).sort((a, b) => b.monthKey.localeCompare(a.monthKey));
+  }, [transactions, selectedMonth]);
+
+  const upcomingBills = useMemo(() => {
+    return bills.filter((b) => b.status === 'pending');
+  }, [bills]);
+
+  // ==========================================================================
+  // 8. CRUD İŞLEMLERİ (YEREL + BULUT HİBRİT KAYIT)
+  // ==========================================================================
+  const handleSaveTransaction = async (payload) => {
+    const amountNum = parseFloat(String(payload.amount).replace(',', '.'));
+    if (isNaN(amountNum) || amountNum <= 0) {
+      showToast('Lütfen 0’dan büyük geçerli bir tutar girin.', 'error');
+      return false;
+    }
+
+    const memberName = userProfile?.displayName || user?.displayName || 'Aile Üyesi';
+    const uid = user?.uid || userProfile?.uid || 'local_user';
+
+    if (editingTx) {
+      const updatedFields = {
+        type: payload.type,
+        amount: amountNum,
+        description: payload.description.trim(),
+        category: payload.category,
+        date: payload.date,
+        monthKey: payload.date.slice(0, 7),
+        updatedAt: new Date().toISOString(),
+        updatedBy: memberName
+      };
+
+      setTransactions((prev) =>
+        prev.map((item) => (item.id === editingTx.id ? { ...item, ...updatedFields } : item))
+      );
+
+      if (firebaseEnabled && db && user && !String(editingTx.id).startsWith('loc_')) {
+        try {
+          await updateDoc(
+            doc(db, 'artifacts', appId, 'public', 'data', 'transactions', editingTx.id),
+            updatedFields
+          );
+        } catch (err) {
+          console.warn('Bulut güncelleme hatası (yerelde kaydedildi):', err);
+        }
+      }
+
+      setEditingTx(null);
+      showToast('İşlem başarıyla güncellendi.');
+    } else {
+      const newRecord = {
+        budgetId: activeBudgetId,
+        type: payload.type,
+        amount: amountNum,
+        description: payload.description.trim(),
+        category: payload.category,
+        date: payload.date,
+        monthKey: payload.date.slice(0, 7),
+        createdByUid: uid,
+        createdByName: memberName,
+        createdAt: new Date().toISOString()
+      };
+
+      const tempId = generateLocalId();
+      setTransactions((prev) => [{ id: tempId, ...newRecord }, ...prev]);
+
+      if (firebaseEnabled && db && user) {
+        try {
+          const docRef = await addDoc(
+            collection(db, 'artifacts', appId, 'public', 'data', 'transactions'),
+            newRecord
+          );
+          setTransactions((prev) =>
+            prev.map((item) => (item.id === tempId ? { ...item, id: docRef.id } : item))
+          );
+        } catch (err) {
+          console.warn('Bulut ekleme hatası (yerelde kaydedildi):', err);
+        }
+      }
+
+      showToast(payload.type === 'income' ? 'Gelir kaydı eklendi.' : 'Gider kaydı eklendi.');
+    }
+
+    setSelectedMonth(payload.date.slice(0, 7));
+    setActiveTab('home');
+    return true;
+  };
+
+  const handleDeleteTransaction = (tx) => {
+    setConfirmModal({
+      title: 'İşlemi Sil',
+      message: `"${tx.description || getCategoryMeta(tx.type, tx.category).label}" (${formatCurrency(
+        tx.amount
+      )}) kaydını silmek istediğinize emin misiniz?`,
+      confirmText: 'Evet, Sil',
+      danger: true,
+      onConfirm: async () => {
+        setTransactions((prev) => prev.filter((item) => item.id !== tx.id));
+        if (firebaseEnabled && db && user && !String(tx.id).startsWith('loc_')) {
+          try {
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'transactions', tx.id));
+          } catch (err) {
+            console.warn('Bulut silme hatası:', err);
+          }
+        }
+        showToast('İşlem silindi.');
+        setConfirmModal(null);
+      }
+    });
+  };
+
+  const handleAddBill = async (billData) => {
+    const amountNum = parseFloat(String(billData.amount).replace(',', '.'));
+    if (isNaN(amountNum) || amountNum <= 0) {
+      showToast('Lütfen geçerli bir ödeme tutarı girin.', 'error');
+      return false;
+    }
+
+    const newBill = {
+      budgetId: activeBudgetId,
+      title: billData.title.trim(),
+      category: billData.category,
+      amount: amountNum,
+      dueDate: billData.dueDate,
+      recurring: Boolean(billData.recurring),
+      status: 'pending',
+      createdByUid: user?.uid || userProfile?.uid || 'local_user',
+      createdByName: userProfile?.displayName || 'Aile Üyesi',
+      createdAt: new Date().toISOString()
+    };
+
+    const tempId = generateLocalId();
+    setBills((prev) =>
+      [...prev, { id: tempId, ...newBill }].sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+    );
+
+    if (firebaseEnabled && db && user) {
+      try {
+        const docRef = await addDoc(
+          collection(db, 'artifacts', appId, 'public', 'data', 'bills'),
+          newBill
+        );
+        setBills((prev) =>
+          prev.map((item) => (item.id === tempId ? { ...item, id: docRef.id } : item))
+        );
+      } catch (err) {
+        console.warn('Bulut fatura ekleme hatası:', err);
+      }
+    }
+
+    showToast('Planlı ödeme listeye eklendi.');
+    return true;
+  };
+
+  const handleConfirmPayBill = async (bill, recordAsExpense, createNextRecurring) => {
+    const memberName = userProfile?.displayName || 'Aile Üyesi';
+    const today = getTodayISO();
+
+    // 1. Ödemeyi 'paid' yap
+    setBills((prev) =>
+      prev.map((b) =>
+        b.id === bill.id ? { ...b, status: 'paid', paidDate: today, paidByName: memberName } : b
+      )
+    );
+
+    if (firebaseEnabled && db && user && !String(bill.id).startsWith('loc_')) {
+      try {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', bill.id), {
+          status: 'paid',
+          paidDate: today,
+          paidByName: memberName
+        });
+      } catch (err) {
+        console.warn('Bulut ödeme güncelleme hatası:', err);
+      }
+    }
+
+    // 2. İstenirse gider olarak ekle
+    if (recordAsExpense) {
+      const mappedCategory =
+        bill.category === 'kira'
+          ? 'kira'
+          : bill.category === 'kredi_taksit' || bill.category === 'kredi_karti'
+          ? 'borc'
+          : 'fatura';
+
+      const newExpense = {
+        budgetId: activeBudgetId,
+        type: 'expense',
+        amount: Number(bill.amount),
+        description: `${bill.title} (Ödeme)`,
+        category: mappedCategory,
+        date: today,
+        monthKey: today.slice(0, 7),
+        createdByUid: user?.uid || userProfile?.uid || 'local_user',
+        createdByName: memberName,
+        createdAt: new Date().toISOString()
+      };
+
+      const tempTxId = generateLocalId();
+      setTransactions((prev) => [{ id: tempTxId, ...newExpense }, ...prev]);
+
+      if (firebaseEnabled && db && user) {
+        try {
+          const docRef = await addDoc(
+            collection(db, 'artifacts', appId, 'public', 'data', 'transactions'),
+            newExpense
+          );
+          setTransactions((prev) =>
+            prev.map((t) => (t.id === tempTxId ? { ...t, id: docRef.id } : t))
+          );
+        } catch (err) {
+          console.warn('Bulut gider kaydı hatası:', err);
+        }
+      }
+    }
+
+    // 3. Tekrarlı ödeme ise gelecek ay için yeni kayıt oluştur
+    if (bill.recurring && createNextRecurring) {
+      const nextBill = {
+        budgetId: activeBudgetId,
+        title: bill.title,
+        category: bill.category,
+        amount: Number(bill.amount),
+        dueDate: addOneMonthToDate(bill.dueDate),
+        recurring: true,
+        status: 'pending',
+        createdByUid: user?.uid || userProfile?.uid || 'local_user',
+        createdByName: memberName,
+        createdAt: new Date().toISOString()
+      };
+
+      const tempBillId = generateLocalId();
+      setBills((prev) =>
+        [...prev, { id: tempBillId, ...nextBill }].sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+      );
+
+      if (firebaseEnabled && db && user) {
+        try {
+          const docRef = await addDoc(
+            collection(db, 'artifacts', appId, 'public', 'data', 'bills'),
+            nextBill
+          );
+          setBills((prev) =>
+            prev.map((b) => (b.id === tempBillId ? { ...b, id: docRef.id } : b))
+          );
+        } catch (err) {
+          console.warn('Bulut tekrarlı fatura hatası:', err);
+        }
+      }
+    }
+
+    showToast(
+      recordAsExpense
+        ? 'Ödeme tamamlandı ve gider olarak işlendi.'
+        : 'Ödeme tamamlandı olarak işaretlendi.'
+    );
+    setPayBillModal(null);
+  };
+
+  const handleDeleteBill = (bill) => {
+    setConfirmModal({
+      title: 'Ödeme Kaydını Sil',
+      message: `"${bill.title}" (${formatCurrency(bill.amount)}) kaydını silmek istediğinize emin misiniz?`,
+      confirmText: 'Sil',
+      danger: true,
+      onConfirm: async () => {
+        setBills((prev) => prev.filter((b) => b.id !== bill.id));
+        if (firebaseEnabled && db && user && !String(bill.id).startsWith('loc_')) {
+          try {
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'bills', bill.id));
+          } catch (err) {
+            console.warn('Bulut fatura silme hatası:', err);
+          }
+        }
+        showToast('Ödeme kaydı silindi.');
+        setConfirmModal(null);
+      }
+    });
+  };
+
+  const handleToggleCarryover = async () => {
+    const nextVal = !(budgetInfo?.carryoverEnabled !== false);
+    setBudgetInfo((prev) => ({ ...prev, carryoverEnabled: nextVal }));
+
+    if (firebaseEnabled && db && user && activeBudgetId) {
+      try {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'budgets', activeBudgetId), {
+          carryoverEnabled: nextVal
+        });
+      } catch (err) {
+        console.warn('Bulut devir ayarı güncelleme hatası:', err);
+      }
+    }
+    showToast(nextVal ? 'Önceki aydan bakiye devri açıldı.' : 'Önceki aydan bakiye devri kapatıldı.');
+  };
+
+  // ==========================================================================
+  // 9. ORTAK BÜTÇEYE KATILMA & JSON YEDEK DIŞA/İÇE AKTARMA
+  // ==========================================================================
+  const handleJoinBudget = async (inviteCodeInput, customDisplayName) => {
+    const code = inviteCodeInput.trim().toUpperCase();
+    if (code.length < 4) {
+      showToast('Lütfen geçerli bir davet kodu girin.', 'error');
+      return false;
+    }
+
+    const memberName = (customDisplayName || userProfile?.displayName || 'Aile Üyesi').trim();
+    const uid = user?.uid || userProfile?.uid || 'local_user';
+
+    if (firebaseEnabled && db && user) {
+      try {
+        const targetBudgetRef = doc(db, 'artifacts', appId, 'public', 'data', 'budgets', code);
+        const snap = await getDoc(targetBudgetRef);
+        if (!snap.exists()) {
+          showToast('Bulutta bu davet koduna ait bir ortak bütçe bulunamadı.', 'error');
+          return false;
+        }
+
+        const targetData = snap.data();
+        const existingMembers = Array.isArray(targetData.members) ? targetData.members : [];
+        const alreadyMember = existingMembers.some((m) => m.uid === uid);
+
+        const updatedMembers = alreadyMember
+          ? existingMembers.map((m) => (m.uid === uid ? { ...m, name: memberName } : m))
+          : [
+              ...existingMembers,
+              {
+                uid,
+                name: memberName,
+                role: 'Ortak',
+                joinedAt: new Date().toISOString()
+              }
+            ];
+
+        await updateDoc(targetBudgetRef, { members: updatedMembers });
+
+        const profileRef = doc(db, 'artifacts', appId, 'users', uid, 'profile', 'main');
+        await setDoc(
+          profileRef,
+          {
+            uid,
+            displayName: memberName,
+            email: user.email || userProfile?.email || '',
+            photoURL: user.photoURL || userProfile?.photoURL || '',
+            activeBudgetId: code,
+            updatedAt: new Date().toISOString()
+          },
+          { merge: true }
+        );
+
+        setUserProfile((prev) => ({ ...prev, displayName: memberName, activeBudgetId: code }));
+        setBudgetInfo({ ...targetData, members: updatedMembers });
+        showToast(`"${targetData.name || 'Ortak Bütçe'}" hesabına bağlandınız!`);
+        setFamilyModalOpen(false);
+        return true;
+      } catch (err) {
+        console.warn('Ortak bütçe bağlantı hatası:', err);
+        showToast('Bulut bağlantısı şu an kısıtlı, ortak kod yerel olarak kaydedildi.', 'error');
+      }
+    }
+
+    setUserProfile((prev) => ({ ...prev, displayName: memberName, activeBudgetId: code }));
+    setBudgetInfo((prev) => ({ ...prev, budgetId: code }));
+    showToast(`Bütçe kodu (${code}) güncellendi.`);
+    setFamilyModalOpen(false);
+    return true;
+  };
+
+  const handleUpdateMemberName = async (newName) => {
+    if (!newName.trim()) return;
+    const cleanName = newName.trim();
+    const uid = user?.uid || userProfile?.uid;
+
+    setUserProfile((prev) => ({ ...prev, displayName: cleanName }));
+    setBudgetInfo((prev) => ({
+      ...prev,
+      members: Array.isArray(prev?.members)
+        ? prev.members.map((m) => (m.uid === uid ? { ...m, name: cleanName } : m))
+        : prev?.members
+    }));
+
+    if (firebaseEnabled && db && user && activeBudgetId) {
+      try {
+        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'main'), {
+          displayName: cleanName
+        });
+        if (budgetInfo && Array.isArray(budgetInfo.members)) {
+          const updatedMembers = budgetInfo.members.map((m) =>
+            m.uid === user.uid ? { ...m, name: cleanName } : m
+          );
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'budgets', activeBudgetId), {
+            members: updatedMembers
+          });
+        }
+      } catch (err) {
+        console.warn('İsim bulut güncelleme hatası:', err);
+      }
+    }
+    showToast('Görünen adınız güncellendi.');
+  };
+
+  const handleExportBackup = () => {
+    try {
+      const backupPayload = {
+        app: 'Bizim Bütçe',
+        version: '2.0',
+        exportedAt: new Date().toISOString(),
+        budgetInfo,
+        transactions,
+        bills
+      };
+      const blob = new Blob([JSON.stringify(backupPayload, null, 2)], {
+        type: 'application/json'
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `bizim-butce-yedek-${getTodayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Yedek dosyası telefonunuza indirildi!');
+    } catch {
+      showToast('Yedek dosyası oluşturulamadı.', 'error');
+    }
+  };
+
+  const handleImportBackup = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const parsed = JSON.parse(e.target.result);
+        if (!Array.isArray(parsed.transactions)) {
+          showToast('Geçersiz yedek dosyası formatı.', 'error');
+          return;
+        }
+        setTransactions(parsed.transactions);
+        if (Array.isArray(parsed.bills)) setBills(parsed.bills);
+        if (parsed.budgetInfo) setBudgetInfo((prev) => ({ ...prev, ...parsed.budgetInfo }));
+        showToast(`${parsed.transactions.length} işlem başarıyla geri yüklendi!`);
+      } catch {
+        showToast('Yedek dosyası okunamadı.', 'error');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const isGoogleBacked = Boolean(user && !user.isAnonymous);
+
+  // ==========================================================================
+  // 10. ANA ARAYÜZ RENDER (ANINDA YÜKLENİR)
+  // ==========================================================================
+  return (
+    <div className={darkMode ? 'dark' : ''}>
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-200 pb-24">
+        {/* BİLDİRİM TOAST */}
+        {toast && (
+          <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md pointer-events-none">
+            <div
+              className={`flex items-center gap-2.5 px-4 py-3 rounded-2xl shadow-xl border text-sm font-medium backdrop-blur-md transition-all ${
+                toast.type === 'error'
+                  ? 'bg-rose-600/95 text-white border-rose-500'
+                  : 'bg-slate-900/95 dark:bg-emerald-600/95 text-white border-slate-700 dark:border-emerald-500'
+              }`}
+            >
+              {toast.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+              )}
+              <span>{toast.message}</span>
+            </div>
+          </div>
+        )}
+
+        {/* ÜST BAŞLIK (HEADER) */}
+        <header className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-lg border-b border-slate-200/80 dark:border-slate-800/80">
+          <div className="max-w-2xl mx-auto px-4 h-14 flex items-center justify-between gap-2">
+            {/* Logo & Uygulama Adı */}
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-md shadow-emerald-500/20 shrink-0">
+                <Wallet className="w-5 h-5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="font-extrabold text-base tracking-tight text-slate-900 dark:text-white leading-none truncate">
+                  Bizim Bütçe
+                </h1>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                  {budgetInfo?.name || 'Ortak Aile Bütçesi'}
+                </p>
+              </div>
+            </div>
+
+            {/* Sağ Kontroller: Ortak Hesap, Bulut Yedekleme Durumu ve Tema */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => setFamilyModalOpen(true)}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-200/70 dark:border-emerald-500/20 text-xs font-semibold active:scale-95 transition"
+                title="Ortak Aile Bütçesi ve Davet Kodu"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Ortak Hesap</span>
+                <span className="font-mono tracking-wider text-[11px] bg-white/80 dark:bg-slate-800 px-1.5 py-0.5 rounded">
+                  {activeBudgetId}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setAuthModalOpen(true)}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold active:scale-95 transition ${
+                  isGoogleBacked
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-sky-500/10 border-sky-500/30 text-sky-700 dark:text-sky-300'
+                }`}
+                title="Google Hesabı ve Bulut Yedekleme"
+              >
+                {isGoogleBacked ? (
+                  <>
+                    {user?.photoURL ? (
+                      <img
+                        src={user.photoURL}
+                        alt=""
+                        className="w-4 h-4 rounded-full object-cover"
+                      />
+                    ) : (
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    )}
+                    <span>Google Yedekli</span>
+                  </>
+                ) : (
+                  <>
+                    <Cloud className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />
+                    <span>{cloudConnected ? 'Bulut Hazır' : 'Yedekle'}</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => setDarkMode(!darkMode)}
+                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 transition"
+                aria-label="Tema Değiştir"
+              >
+                {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {/* AY / YIL SEÇİCİ ŞERİDİ */}
+          <div className="max-w-2xl mx-auto px-4 py-2 border-t border-slate-100 dark:border-slate-800/60 flex items-center justify-between bg-slate-50/60 dark:bg-slate-900/40">
+            <button
+              onClick={() => setSelectedMonth((prev) => shiftMonthKey(prev, -1))}
+              className="p-1.5 rounded-lg hover:bg-slate-200/70 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 active:scale-95 transition"
+              aria-label="Önceki Ay"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm sm:text-base text-slate-800 dark:text-white">
+                {formatMonthLabel(selectedMonth)}
+              </span>
+              {selectedMonth !== getCurrentMonthKey() && (
+                <button
+                  onClick={() => setSelectedMonth(getCurrentMonthKey())}
+                  className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                >
+                  Bugüne Dön
+                </button>
+              )}
+            </div>
+
+            <button
+              onClick={() => setSelectedMonth((prev) => shiftMonthKey(prev, 1))}
+              className="p-1.5 rounded-lg hover:bg-slate-200/70 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 active:scale-95 transition"
+              aria-label="Sonraki Ay"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+        </header>
+
+        {/* ANA İÇERİK ALANI */}
+        <main className="max-w-2xl mx-auto px-4 pt-4">
+          {activeTab === 'home' && (
+            <HomeDashboard
+              selectedMonth={selectedMonth}
+              summary={financialSummary}
+              upcomingBills={upcomingBills}
+              onToggleCarryover={handleToggleCarryover}
+              onEditTx={(tx) => {
+                setEditingTx(tx);
+                setActiveTab('add');
+              }}
+              onDeleteTx={handleDeleteTransaction}
+              onOpenPayBill={(bill) => setPayBillModal(bill)}
+              onNavigate={setActiveTab}
+              isGoogleBacked={isGoogleBacked}
+              onOpenBackupModal={() => setAuthModalOpen(true)}
+            />
+          )}
+
+          {activeTab === 'bills' && (
+            <BillsManager
+              bills={bills}
+              onAddBill={handleAddBill}
+              onOpenPayBill={(bill) => setPayBillModal(bill)}
+              onDeleteBill={handleDeleteBill}
+            />
+          )}
+
+          {activeTab === 'add' && (
+            <TransactionForm
+              editingTx={editingTx}
+              selectedMonth={selectedMonth}
+              onSave={handleSaveTransaction}
+              onCancelEdit={() => {
+                setEditingTx(null);
+                setActiveTab('home');
+              }}
+            />
+          )}
+
+          {activeTab === 'history' && (
+            <HistoryAndReports
+              transactions={transactions}
+              monthlyArchives={monthlyArchives}
+              selectedMonth={selectedMonth}
+              onSelectMonth={(mKey) => {
+                setSelectedMonth(mKey);
+                setActiveTab('home');
+              }}
+              onEditTx={(tx) => {
+                setEditingTx(tx);
+                setActiveTab('add');
+              }}
+              onDeleteTx={handleDeleteTransaction}
+              members={budgetInfo?.members || []}
+            />
+          )}
+        </main>
+
+        {/* SABİT ALT MOBİL NAVİGASYON BARI */}
+        <nav className="fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur-lg border-t border-slate-200 dark:border-slate-800 pb-safe">
+          <div className="max-w-2xl mx-auto px-2 h-16 grid grid-cols-4 items-center">
+            <NavButton
+              active={activeTab === 'home'}
+              onClick={() => {
+                setEditingTx(null);
+                setActiveTab('home');
+              }}
+              icon={Home}
+              label="Ana Sayfa"
+            />
+            <NavButton
+              active={activeTab === 'bills'}
+              onClick={() => {
+                setEditingTx(null);
+                setActiveTab('bills');
+              }}
+              icon={CalendarClock}
+              label="Ödemeler"
+              badge={upcomingBills.length > 0 ? upcomingBills.length : null}
+            />
+            <NavButton
+              active={activeTab === 'add'}
+              onClick={() => {
+                setEditingTx(null);
+                setActiveTab('add');
+              }}
+              icon={PlusCircle}
+              label={editingTx ? 'Düzenle' : 'Ekle'}
+              highlight
+            />
+            <NavButton
+              active={activeTab === 'history'}
+              onClick={() => {
+                setEditingTx(null);
+                setActiveTab('history');
+              }}
+              icon={History}
+              label="Geçmiş"
+            />
+          </div>
+        </nav>
+
+        {/* ORTAK BÜTÇE / AİLE DAVET MODALI */}
+        {familyModalOpen && (
+          <FamilyBudgetModal
+            budgetInfo={budgetInfo}
+            activeBudgetId={activeBudgetId}
+            userProfile={userProfile}
+            currentUid={user?.uid || userProfile?.uid}
+            onClose={() => setFamilyModalOpen(false)}
+            onJoinBudget={handleJoinBudget}
+            onUpdateName={handleUpdateMemberName}
+            onCopySuccess={() => showToast('Davet kodu panoya kopyalandı!')}
+          />
+        )}
+
+        {/* HESAP & BULUT OTURUM YÖNETİMİ MODALI */}
+        {authModalOpen && (
+          <AccountAuthModal
+            user={user}
+            userProfile={userProfile}
+            activeBudgetId={activeBudgetId}
+            budgetInfo={budgetInfo}
+            cloudConnected={cloudConnected}
+            onClose={() => setAuthModalOpen(false)}
+            onNotify={showToast}
+            onExportBackup={handleExportBackup}
+            onImportBackup={handleImportBackup}
+            onAccountConflict={(conflictData) => {
+              setAuthModalOpen(false);
+              setAccountConflictModal(conflictData);
+            }}
+          />
+        )}
+
+        {/* ESKİ TELEFON / MEVCUT GOOGLE BÜTÇESİ ÇAKIŞMA ÇÖZÜM MODALI */}
+        {accountConflictModal && (
+          <BudgetRestoreConflictModal
+            conflict={accountConflictModal}
+            onClose={() => setAccountConflictModal(null)}
+            onChooseCloudBudget={async () => {
+              const { googleUser, existingBudgetId } = accountConflictModal;
+              try {
+                if (firebaseEnabled && db) {
+                  const profileRef = doc(
+                    db,
+                    'artifacts',
+                    appId,
+                    'users',
+                    googleUser.uid,
+                    'profile',
+                    'main'
+                  );
+                  await setDoc(
+                    profileRef,
+                    {
+                      uid: googleUser.uid,
+                      displayName: googleUser.displayName || 'Aile Üyesi',
+                      email: googleUser.email || '',
+                      photoURL: googleUser.photoURL || '',
+                      activeBudgetId: existingBudgetId,
+                      updatedAt: new Date().toISOString()
+                    },
+                    { merge: true }
+                  );
+                }
+                setUserProfile((prev) => ({
+                  ...prev,
+                  uid: googleUser.uid,
+                  displayName: googleUser.displayName || prev?.displayName,
+                  email: googleUser.email || '',
+                  photoURL: googleUser.photoURL || '',
+                  activeBudgetId: existingBudgetId
+                }));
+                showToast('Eski telefonunuzdaki bulut bütçesi başarıyla geri yüklendi!');
+              } catch {
+                showToast('Bütçe geri yüklenirken hata oluştu.', 'error');
+              } finally {
+                setAccountConflictModal(null);
+              }
+            }}
+            onKeepCurrentDeviceBudget={async () => {
+              const { googleUser, currentLocalBudgetId } = accountConflictModal;
+              try {
+                if (firebaseEnabled && db) {
+                  const profileRef = doc(
+                    db,
+                    'artifacts',
+                    appId,
+                    'users',
+                    googleUser.uid,
+                    'profile',
+                    'main'
+                  );
+                  await setDoc(
+                    profileRef,
+                    {
+                      uid: googleUser.uid,
+                      displayName: googleUser.displayName || 'Aile Üyesi',
+                      email: googleUser.email || '',
+                      photoURL: googleUser.photoURL || '',
+                      activeBudgetId: currentLocalBudgetId,
+                      updatedAt: new Date().toISOString()
+                    },
+                    { merge: true }
+                  );
+                }
+                setUserProfile((prev) => ({
+                  ...prev,
+                  uid: googleUser.uid,
+                  displayName: googleUser.displayName || prev?.displayName,
+                  email: googleUser.email || '',
+                  photoURL: googleUser.photoURL || '',
+                  activeBudgetId: currentLocalBudgetId
+                }));
+                showToast('Bu cihazdaki bütçe Google hesabınıza yedeklendi!');
+              } catch {
+                showToast('Yedekleme güncellenirken hata oluştu.', 'error');
+              } finally {
+                setAccountConflictModal(null);
+              }
+            }}
+          />
+        )}
+
+        {/* ÖDEME TAMAMLAMA ONAY MODALI */}
+        {payBillModal && (
+          <PayBillConfirmModal
+            bill={payBillModal}
+            onClose={() => setPayBillModal(null)}
+            onConfirm={handleConfirmPayBill}
+          />
+        )}
+
+        {/* GENEL ONAY (SİLME VB.) MODALI */}
+        {confirmModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl">
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                {confirmModal.title}
+              </h3>
+              <p className="text-sm text-slate-600 dark:text-slate-300 mt-2 leading-relaxed">
+                {confirmModal.message}
+              </p>
+              <div className="flex items-center gap-3 mt-6">
+                <button
+                  onClick={() => setConfirmModal(null)}
+                  className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-sm"
+                >
+                  Vazgeç
+                </button>
+                <button
+                  onClick={confirmModal.onConfirm}
+                  className={`flex-1 py-2.5 px-4 rounded-xl font-semibold text-sm text-white ${
+                    confirmModal.danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-emerald-600'
+                  }`}
+                >
+                  {confirmModal.confirmText || 'Onayla'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// ALT NAVİGASYON BUTONU BİLEŞENİ
+// ============================================================================
+function NavButton({ active, onClick, icon: Icon, label, badge, highlight }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`relative flex flex-col items-center justify-center h-full gap-1 transition active:scale-95 ${
+        active
+          ? 'text-emerald-600 dark:text-emerald-400'
+          : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+      }`}
+    >
+      <div
+        className={`relative flex items-center justify-center rounded-2xl transition-all ${
+          highlight
+            ? active
+              ? 'w-11 h-8 bg-emerald-600 text-white shadow-md shadow-emerald-600/30'
+              : 'w-11 h-8 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+            : 'w-9 h-7'
+        }`}
+      >
+        <Icon className="w-5 h-5" />
+        {badge ? (
+          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+            {badge}
+          </span>
+        ) : null}
+      </div>
+      <span className={`text-[11px] font-semibold leading-none ${active ? 'font-bold' : ''}`}>
+        {label}
+      </span>
+    </button>
+  );
+}
+
+// ============================================================================
+// ANA SAYFA (DASHBOARD) BİLEŞENİ
+// ============================================================================
+function HomeDashboard({
+  selectedMonth,
+  summary,
+  upcomingBills,
+  onToggleCarryover,
+  onEditTx,
+  onDeleteTx,
+  onOpenPayBill,
+  onNavigate,
+  isGoogleBacked,
+  onOpenBackupModal
+}) {
+  const recentTransactions = summary.monthTransactions.slice(0, 6);
+
+  return (
+    <div className="space-y-4">
+      {/* YEDEKLEME HATIRLATMA ŞERİDİ (SADECE GOOGLE BAĞLI DEĞİLSE) */}
+      {!isGoogleBacked && (
+        <button
+          onClick={onOpenBackupModal}
+          className="w-full p-3 rounded-2xl bg-sky-50 dark:bg-sky-500/10 border border-sky-200/80 dark:border-sky-500/25 flex items-center justify-between gap-3 text-left active:scale-[0.99] transition"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-sky-500/15 text-sky-600 dark:text-sky-400 flex items-center justify-center shrink-0">
+              <Cloud className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-slate-800 dark:text-white truncate">
+                Google Hesabınızı Bağlayın veya Yedek Alın
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                Telefon değiştiğinde verilerinizin kaybolmaması için dokunun
+              </p>
+            </div>
+          </div>
+          <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-sky-600 text-white shrink-0">
+            Yedekle
+          </span>
+        </button>
+      )}
+
+      {/* ANA BAKİYE VE GELİR/GİDER KARTI */}
+      <section className="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 text-white p-5 shadow-xl shadow-slate-900/10 dark:shadow-none border border-slate-800">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <p className="text-xs font-medium text-emerald-300/90">
+              {formatMonthLabel(selectedMonth)} — Eldeki Kalan Para
+            </p>
+            <h2
+              className={`text-3xl sm:text-4xl font-extrabold tracking-tight mt-1 ${
+                summary.remainingCash < 0 ? 'text-rose-400' : 'text-white'
+              }`}
+            >
+              {formatCurrency(summary.remainingCash)}
+            </h2>
+          </div>
+
+          <button
+            onClick={onToggleCarryover}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition active:scale-95 ${
+              summary.carryoverEnabled
+                ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-200'
+                : 'bg-white/10 border-white/15 text-slate-300'
+            }`}
+            title="Önceki aylardan kalan bakiyeyi bu aya devret"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5" />
+            <span>{summary.carryoverEnabled ? 'Devir Açık' : 'Devir Kapalı'}</span>
+          </button>
+        </div>
+
+        {/* Devreden Bakiye Bilgisi */}
+        {summary.carryoverEnabled && (
+          <div className="mt-2.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 text-[11px] text-slate-200">
+            <span>Önceki aylardan devreden:</span>
+            <strong
+              className={
+                summary.effectiveCarryover >= 0 ? 'text-emerald-300' : 'text-rose-300'
+              }
+            >
+              {formatCurrency(summary.effectiveCarryover)}
+            </strong>
+          </div>
+        )}
+
+        {/* Toplam Gelir & Toplam Gider Kutuları */}
+        <div className="grid grid-cols-2 gap-3 mt-5">
+          <div className="p-3.5 rounded-2xl bg-white/10 backdrop-blur-sm border border-white/10">
+            <div className="flex items-center gap-1.5 text-emerald-300 text-xs font-semibold">
+              <TrendingUp className="w-4 h-4" />
+              <span>Toplam Gelir</span>
+            </div>
+            <p className="text-lg sm:text-xl font-extrabold text-white mt-1 truncate">
+              {formatCurrency(summary.monthlyIncome)}
+            </p>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-white/10 backdrop-blur-sm border border-white/10">
+            <div className="flex items-center gap-1.5 text-rose-300 text-xs font-semibold">
+              <TrendingDown className="w-4 h-4" />
+              <span>Toplam Gider</span>
+            </div>
+            <p className="text-lg sm:text-xl font-extrabold text-white mt-1 truncate">
+              {formatCurrency(summary.monthlyExpense)}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* BU AY YAPILAN HARCAMALAR (KATEGORİ DAĞILIMI) */}
+      <section className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+            Bu Ay Yapılan Harcamalar
+          </h3>
+          <span className="text-xs font-bold text-rose-600 dark:text-rose-400">
+            {formatCurrency(summary.monthlyExpense)}
+          </span>
+        </div>
+
+        {summary.categoryBreakdown.length === 0 ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400 py-4 text-center">
+            Bu ay henüz harcama kaydı girilmemiş.
+          </p>
+        ) : (
+          <div className="space-y-3">
+            {summary.categoryBreakdown.slice(0, 4).map((cat) => {
+              const Icon = cat.icon;
+              return (
+                <div key={cat.id} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-200">
+                      <span className={`w-6 h-6 rounded-lg flex items-center justify-center ${cat.color}`}>
+                        <Icon className="w-3.5 h-3.5" />
+                      </span>
+                      <span>{cat.label}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-400">%{cat.percentage}</span>
+                      <span className="font-bold text-slate-900 dark:text-white">
+                        {formatCurrency(cat.total)}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-emerald-500 transition-all duration-300"
+                      style={{ width: `${Math.min(100, cat.percentage)}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* YAKLAŞAN ÖDEMELER */}
+      <section className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <h3 className="font-bold text-sm text-slate-900 dark:text-white">Yaklaşan Ödemeler</h3>
+            {upcomingBills.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[11px] font-bold">
+                {upcomingBills.length}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => onNavigate('bills')}
+            className="text-xs font-bold text-emerald-600 dark:text-emerald-400"
+          >
+            Tümünü Gör
+          </button>
+        </div>
+
+        {upcomingBills.length === 0 ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400 py-3 text-center">
+            Bekleyen yaklaşan ödemeniz bulunmuyor.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {upcomingBills.slice(0, 3).map((bill) => {
+              const isOverdue = bill.dueDate < getTodayISO();
+              return (
+                <div
+                  key={bill.id}
+                  className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {bill.title}
+                      </p>
+                      {isOverdue && (
+                        <span className="px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 dark:text-rose-400 text-[10px] font-bold shrink-0">
+                          Gecikmiş
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Son Ödeme: {bill.dueDate.split('-').reverse().join('.')}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                      {formatCurrency(bill.amount)}
+                    </span>
+                    <button
+                      onClick={() => onOpenPayBill(bill)}
+                      className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold active:scale-95 transition"
+                    >
+                      Öde
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* SON İŞLEMLER */}
+      <section className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-sm text-slate-900 dark:text-white">Son İşlemler</h3>
+          <button
+            onClick={() => onNavigate('history')}
+            className="text-xs font-bold text-emerald-600 dark:text-emerald-400"
+          >
+            Tüm Geçmiş
+          </button>
+        </div>
+
+        {recentTransactions.length === 0 ? (
+          <div className="py-6 text-center space-y-2">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Bu ay henüz gelir veya gider kaydı yok.
+            </p>
+            <button
+              onClick={() => onNavigate('add')}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>İlk İşlemi Ekle</span>
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {recentTransactions.map((tx) => (
+              <TransactionRow
+                key={tx.id}
+                tx={tx}
+                onEdit={() => onEditTx(tx)}
+                onDelete={() => onDeleteTx(tx)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// ============================================================================
+// İŞLEM SATIRI BİLEŞENİ
+// ============================================================================
+function TransactionRow({ tx, onEdit, onDelete }) {
+  const meta = getCategoryMeta(tx.type, tx.category);
+  const Icon = meta.icon;
+  const isIncome = tx.type === 'income';
+
+  return (
+    <div className="flex items-center justify-between gap-2.5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800/80">
+      <div className="flex items-center gap-2.5 min-w-0">
+        <div
+          className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${meta.color}`}
+        >
+          <Icon className="w-4 h-4" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+            {tx.description || meta.label}
+          </p>
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+            <span>{meta.label}</span>
+            <span>•</span>
+            <span>{(tx.date || '').split('-').reverse().join('.')}</span>
+            {tx.createdByName && (
+              <>
+                <span>•</span>
+                <span className="truncate max-w-[70px]">{tx.createdByName}</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1.5 shrink-0">
+        <span
+          className={`text-xs font-extrabold ${
+            isIncome
+              ? 'text-emerald-600 dark:text-emerald-400'
+              : 'text-rose-600 dark:text-rose-400'
+          }`}
+        >
+          {isIncome ? '+' : '-'}
+          {formatCurrency(tx.amount)}
+        </span>
+        <button
+          onClick={onEdit}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-700"
+          aria-label="Düzenle"
+        >
+          <Pencil className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={onDelete}
+          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-500/10"
+          aria-label="Sil"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// GELİR / GİDER EKLEME VE DÜZENLEME FORMU
+// ============================================================================
+function TransactionForm({ editingTx, selectedMonth, onSave, onCancelEdit }) {
+  const defaultDate = useMemo(() => {
+    const today = getTodayISO();
+    if (today.startsWith(selectedMonth)) return today;
+    return `${selectedMonth}-01`;
+  }, [selectedMonth]);
+
+  const [type, setType] = useState(editingTx?.type || 'expense');
+  const [amount, setAmount] = useState(editingTx ? String(editingTx.amount) : '');
+  const [description, setDescription] = useState(editingTx?.description || '');
+  const [category, setCategory] = useState(
+    editingTx?.category || (editingTx?.type === 'income' ? 'maas' : 'market')
+  );
+  const [date, setDate] = useState(editingTx?.date || defaultDate);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (editingTx) {
+      setType(editingTx.type);
+      setAmount(String(editingTx.amount));
+      setDescription(editingTx.description || '');
+      setCategory(editingTx.category);
+      setDate(editingTx.date);
+    }
+  }, [editingTx]);
+
+  const categories = type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+
+  const handleTypeSwitch = (nextType) => {
+    setType(nextType);
+    setCategory(nextType === 'income' ? 'maas' : 'market');
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
+    const ok = await onSave({ type, amount, description, category, date });
+    setSubmitting(false);
+    if (ok && !editingTx) {
+      setAmount('');
+      setDescription('');
+    }
+  };
+
+  return (
+    <div className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-base font-extrabold text-slate-900 dark:text-white">
+          {editingTx ? 'İşlemi Düzenle' : 'Yeni İşlem Ekle'}
+        </h2>
+        {editingTx && (
+          <button
+            type="button"
+            onClick={onCancelEdit}
+            className="text-xs font-bold text-slate-500 hover:text-slate-800 dark:hover:text-white"
+          >
+            İptal Et
+          </button>
+        )}
+      </div>
+
+      {/* Gelir / Gider Seçici */}
+      <div className="grid grid-cols-2 gap-2 p-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800 mb-5">
+        <button
+          type="button"
+          onClick={() => handleTypeSwitch('expense')}
+          className={`py-2.5 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition ${
+            type === 'expense'
+              ? 'bg-rose-600 text-white shadow-md shadow-rose-600/25'
+              : 'text-slate-600 dark:text-slate-300'
+          }`}
+        >
+          <TrendingDown className="w-4 h-4" />
+          <span>Gider Ekle</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => handleTypeSwitch('income')}
+          className={`py-2.5 rounded-xl text-xs font-extrabold flex items-center justify-center gap-1.5 transition ${
+            type === 'income'
+              ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/25'
+              : 'text-slate-600 dark:text-slate-300'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4" />
+          <span>Gelir Ekle</span>
+        </button>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Tutar */}
+        <div>
+          <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+            Tutar (₺)
+          </label>
+          <input
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            min="0.01"
+            required
+            placeholder="0,00"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="w-full px-4 py-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xl font-extrabold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+        </div>
+
+        {/* Kategori Grid */}
+        <div>
+          <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+            Kategori
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {categories.map((cat) => {
+              const Icon = cat.icon;
+              const selected = category === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setCategory(cat.id)}
+                  className={`p-2.5 rounded-2xl border text-left flex flex-col items-center justify-center gap-1.5 text-center transition active:scale-95 ${
+                    selected
+                      ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold'
+                      : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span className="text-[11px] leading-tight line-clamp-1">{cat.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Açıklama */}
+        <div>
+          <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+            Açıklama
+          </label>
+          <input
+            type="text"
+            placeholder={
+              type === 'income' ? 'Örn: Ekim ayı maaşı' : 'Örn: Haftalık market alışverişi'
+            }
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className="w-full px-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+        </div>
+
+        {/* Tarih */}
+        <div>
+          <label className="block text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5">
+            İşlem Tarihi
+          </label>
+          <input
+            type="date"
+            required
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            className="w-full px-4 py-3 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={submitting}
+          className={`w-full py-3.5 rounded-2xl text-white font-extrabold text-sm shadow-lg transition active:scale-[0.99] disabled:opacity-50 ${
+            type === 'income'
+              ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-600/25'
+              : 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/25'
+          }`}
+        >
+          {submitting
+            ? 'Kaydediliyor...'
+            : editingTx
+            ? 'Değişiklikleri Kaydet'
+            : type === 'income'
+            ? 'Geliri Kaydet'
+            : 'Gideri Kaydet'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// ============================================================================
+// ÖDEMELER (FATURA, KİRA, KREDİ TAKİP) BİLEŞENİ
+// ============================================================================
+function BillsManager({ bills, onAddBill, onOpenPayBill, onDeleteBill }) {
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState('kira');
+  const [amount, setAmount] = useState('');
+  const [dueDate, setDueDate] = useState(getTodayISO());
+  const [recurring, setRecurring] = useState(true);
+  const [filterTab, setFilterTab] = useState('pending'); // 'pending' | 'paid'
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const ok = await onAddBill({ title, category, amount, dueDate, recurring });
+    if (ok) {
+      setTitle('');
+      setAmount('');
+    }
+  };
+
+  const pendingBills = bills.filter((b) => b.status === 'pending');
+  const paidBills = bills.filter((b) => b.status === 'paid');
+  const visibleBills = filterTab === 'pending' ? pendingBills : paidBills;
+
+  const totalPendingAmount = pendingBills.reduce((acc, b) => acc + (Number(b.amount) || 0), 0);
+
+  return (
+    <div className="space-y-4">
+      {/* Yeni Ödeme Planlama Kartı */}
+      <section className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 shadow-sm">
+        <h2 className="text-sm font-extrabold text-slate-900 dark:text-white mb-3">
+          Yeni Planlı Ödeme Ekle
+        </h2>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <input
+              type="text"
+              required
+              placeholder="Ödeme Adı (Örn: Ev Kirası, Elektrik)"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm"
+            />
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm"
+            >
+              {BILL_CATEGORIES.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2.5">
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              min="0.01"
+              required
+              placeholder="Tutar (₺)"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm font-bold"
+            />
+            <input
+              type="date"
+              required
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm"
+            />
+          </div>
+
+          <div className="flex items-center justify-between pt-1">
+            <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={recurring}
+                onChange={(e) => setRecurring(e.target.checked)}
+                className="w-4 h-4 rounded text-emerald-600"
+              />
+              <span className="flex items-center gap-1">
+                <Repeat className="w-3.5 h-3.5 text-emerald-600" /> Her ay tekrarla
+              </span>
+            </label>
+
+            <button
+              type="submit"
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold active:scale-95 transition"
+            >
+              Ödeme Ekle
+            </button>
+          </div>
+        </form>
+      </section>
+
+      {/* Bekleyen / Ödenen Filtresi */}
+      <section className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
+            <button
+              onClick={() => setFilterTab('pending')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                filterTab === 'pending'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-500'
+              }`}
+            >
+              Bekleyen ({pendingBills.length})
+            </button>
+            <button
+              onClick={() => setFilterTab('paid')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
+                filterTab === 'paid'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-500'
+              }`}
+            >
+              Ödenen ({paidBills.length})
+            </button>
+          </div>
+
+          {filterTab === 'pending' && pendingBills.length > 0 && (
+            <span className="text-xs font-extrabold text-amber-600 dark:text-amber-400">
+              Toplam: {formatCurrency(totalPendingAmount)}
+            </span>
+          )}
+        </div>
+
+        {visibleBills.length === 0 ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400 py-6 text-center">
+            {filterTab === 'pending'
+              ? 'Bekleyen ödemeniz bulunmuyor.'
+              : 'Henüz tamamlanmış ödeme kaydı yok.'}
+          </p>
+        ) : (
+          <div className="space-y-2.5">
+            {visibleBills.map((bill) => {
+              const isPaid = bill.status === 'paid';
+              return (
+                <div
+                  key={bill.id}
+                  className="flex items-center justify-between gap-2.5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      {isPaid ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      ) : (
+                        <Clock className="w-4 h-4 text-amber-500 shrink-0" />
+                      )}
+                      <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {bill.title}
+                      </p>
+                      {bill.recurring && (
+                        <Repeat className="w-3 h-3 text-slate-400 shrink-0" title="Aylık Tekrarlı" />
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 pl-5">
+                      {isPaid
+                        ? `Ödendi: ${(bill.paidDate || bill.dueDate).split('-').reverse().join('.')}`
+                        : `Son Tarih: ${bill.dueDate.split('-').reverse().join('.')}`}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="text-xs font-extrabold text-slate-900 dark:text-white">
+                      {formatCurrency(bill.amount)}
+                    </span>
+                    {!isPaid && (
+                      <button
+                        onClick={() => onOpenPayBill(bill)}
+                        className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold"
+                      >
+                        Ödendi İşaretle
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onDeleteBill(bill)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600"
+                      aria-label="Sil"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// ============================================================================
+// GEÇMİŞ VE AYLIK ARŞİV RAPORLARI BİLEŞENİ
+// ============================================================================
+function HistoryAndReports({
+  transactions,
+  monthlyArchives,
+  selectedMonth,
+  onSelectMonth,
+  onEditTx,
+  onDeleteTx
+}) {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all'); // 'all' | 'income' | 'expense'
+
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter((tx) => {
+      if (typeFilter !== 'all' && tx.type !== typeFilter) return false;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const catLabel = getCategoryMeta(tx.type, tx.category).label.toLowerCase();
+        const desc = (tx.description || '').toLowerCase();
+        const by = (tx.createdByName || '').toLowerCase();
+        return desc.includes(q) || catLabel.includes(q) || by.includes(q);
+      }
+      return true;
+    });
+  }, [transactions, typeFilter, searchQuery]);
+
+  return (
+    <div className="space-y-4">
+      {/* Aylık Bütçe Dönemleri Arşivi */}
+      <section className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 shadow-sm">
+        <h2 className="text-sm font-extrabold text-slate-900 dark:text-white mb-3">
+          Aylık Bütçe Dönemleri Arşivi
+        </h2>
+        <div className="flex gap-2.5 overflow-x-auto pb-1">
+          {monthlyArchives.map((item) => {
+            const net = item.income - item.expense;
+            const isSelected = item.monthKey === selectedMonth;
+            return (
+              <button
+                key={item.monthKey}
+                onClick={() => onSelectMonth(item.monthKey)}
+                className={`min-w-[155px] p-3 rounded-2xl border text-left transition shrink-0 ${
+                  isSelected
+                    ? 'border-emerald-500 bg-emerald-500/10'
+                    : 'border-slate-200/80 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50'
+                }`}
+              >
+                <p className="text-xs font-extrabold text-slate-900 dark:text-white">
+                  {formatMonthLabel(item.monthKey)}
+                </p>
+                <div className="mt-2 space-y-0.5 text-[11px]">
+                  <p className="text-emerald-600 dark:text-emerald-400 font-semibold">
+                    Gelir: {formatCurrency(item.income)}
+                  </p>
+                  <p className="text-rose-600 dark:text-rose-400 font-semibold">
+                    Gider: {formatCurrency(item.expense)}
+                  </p>
+                  <p className="text-slate-700 dark:text-slate-200 font-extrabold pt-1 border-t border-slate-200/60 dark:border-slate-700">
+                    Net: {formatCurrency(net)}
+                  </p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Arama ve Filtreleme */}
+      <section className="rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 p-4 shadow-sm space-y-3">
+        <div className="relative">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="Açıklama, kategori veya kişi ara..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-xs sm:text-sm"
+          />
+        </div>
+
+        <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
+          {[
+            { id: 'all', label: `Tümü (${transactions.length})` },
+            {
+              id: 'income',
+              label: `Gelir (${transactions.filter((t) => t.type === 'income').length})`
+            },
+            {
+              id: 'expense',
+              label: `Gider (${transactions.filter((t) => t.type === 'expense').length})`
+            }
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setTypeFilter(tab.id)}
+              className={`py-1.5 rounded-lg text-xs font-bold transition ${
+                typeFilter === tab.id
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                  : 'text-slate-500'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {filteredTransactions.length === 0 ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400 py-8 text-center">
+            Eşleşen işlem kaydı bulunamadı.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {filteredTransactions.map((tx) => (
+              <TransactionRow
+                key={tx.id}
+                tx={tx}
+                onEdit={() => onEditTx(tx)}
+                onDelete={() => onDeleteTx(tx)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// ============================================================================
+// ORTAK AİLE BÜTÇESİ VE DAVET KODU MODALI
+// ============================================================================
+function FamilyBudgetModal({
+  budgetInfo,
+  activeBudgetId,
+  userProfile,
+  currentUid,
+  onClose,
+  onJoinBudget,
+  onUpdateName,
+  onCopySuccess
+}) {
+  const [inviteInput, setInviteInput] = useState('');
+  const [nameInput, setNameInput] = useState(userProfile?.displayName || '');
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyCode = () => {
+    try {
+      navigator.clipboard.writeText(activeBudgetId);
+    } catch {
+      // Kopyalama API kısıtlıysa sessiz geç
+    }
+    setCopied(true);
+    onCopySuccess();
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-3xl max-w-md w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto space-y-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Users className="w-5 h-5 text-emerald-600" />
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+              Ortak Aile Bütçesi
+            </h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Davet Kodu Paylaşımı */}
+        <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-center space-y-2">
+          <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-300">
+            Eşiniz veya aile üyenizle paylaşacağınız Ortak Bütçe Kodu:
+          </p>
+          <div className="flex items-center justify-center gap-2">
+            <span className="text-2xl font-mono font-black tracking-[0.2em] text-slate-900 dark:text-white bg-white dark:bg-slate-800 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700">
+              {activeBudgetId}
+            </span>
+            <button
+              onClick={handleCopyCode}
+              className="p-3 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 active:scale-95 transition"
+              title="Kodu Kopyala"
+            >
+              {copied ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            İkinci telefondan bu kod girildiğinde tüm gelir, gider ve faturalar anında ortak
+            senkronize olur.
+          </p>
+        </div>
+
+        {/* Görünen İsim Güncelleme */}
+        <div className="space-y-1.5">
+          <label className="block text-xs font-bold text-slate-600 dark:text-slate-300">
+            Bütçede Görünen Adınız
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              placeholder="Adınız (Örn: Ahmet)"
+              className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm"
+            />
+            <button
+              onClick={() => onUpdateName(nameInput)}
+              className="px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold"
+            >
+              Kaydet
+            </button>
+          </div>
+        </div>
+
+        {/* Üyeler Listesi */}
+        {Array.isArray(budgetInfo?.members) && budgetInfo.members.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-xs font-bold text-slate-600 dark:text-slate-300">
+              Ortak Bütçe Üyeleri ({budgetInfo.members.length})
+            </p>
+            <div className="space-y-1.5">
+              {budgetInfo.members.map((m, idx) => (
+                <div
+                  key={m.uid || idx}
+                  className="flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 text-xs"
+                >
+                  <span className="font-bold text-slate-800 dark:text-slate-200">
+                    {m.name} {m.uid === currentUid ? '(Siz)' : ''}
+                  </span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold">
+                    {m.role || 'Üye'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Başka Bir Bütçeye Katıl */}
+        <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+          <label className="block text-xs font-bold text-slate-600 dark:text-slate-300">
+            Başka Bir Ortak Bütçeye Bağlan
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              maxLength={8}
+              placeholder="6 Haneli Davet Kodu"
+              value={inviteInput}
+              onChange={(e) => setInviteInput(e.target.value.toUpperCase())}
+              className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm font-mono uppercase"
+            />
+            <button
+              onClick={() => onJoinBudget(inviteInput, nameInput)}
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+            >
+              Bağlan
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// KULLANICI HESABI, GOOGLE BULUT YEDEKLEME VE DOSYA YEDEK MODALI
+// ============================================================================
+function AccountAuthModal({
+  user,
+  userProfile,
+  activeBudgetId,
+  budgetInfo,
+  cloudConnected,
+  onClose,
+  onNotify,
+  onExportBackup,
+  onImportBackup,
+  onAccountConflict
+}) {
+  const [mode, setMode] = useState('login');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [popupWarning, setPopupWarning] = useState('');
+  const fileInputRef = useRef(null);
+
+  const isAnonymous = !user || user.isAnonymous;
+
+  const syncGoogleUserToFirestore = async (googleUser, previousLocalBudgetId) => {
+    if (!firebaseEnabled || !db) return;
+    const profileRef = doc(db, 'artifacts', appId, 'users', googleUser.uid, 'profile', 'main');
+    const existingSnap = await getDoc(profileRef);
+
+    if (existingSnap.exists()) {
+      const existingData = existingSnap.data();
+      const cloudBudgetId = existingData.activeBudgetId;
+
+      if (cloudBudgetId && previousLocalBudgetId && cloudBudgetId !== previousLocalBudgetId) {
+        onAccountConflict({
+          googleUser,
+          existingBudgetId: cloudBudgetId,
+          currentLocalBudgetId: previousLocalBudgetId
+        });
+        return;
+      }
+
+      await setDoc(
+        profileRef,
+        {
+          uid: googleUser.uid,
+          displayName: googleUser.displayName || existingData.displayName || 'Aile Üyesi',
+          email: googleUser.email || existingData.email || '',
+          photoURL: googleUser.photoURL || existingData.photoURL || '',
+          activeBudgetId: cloudBudgetId || previousLocalBudgetId,
+          updatedAt: new Date().toISOString()
+        },
+        { merge: true }
+      );
+      onNotify('Google hesabınıza giriş yapıldı, bulut verileriniz geri yüklendi!');
+    } else {
+      const targetBudgetId = previousLocalBudgetId || generateInviteCode();
+      const displayName =
+        googleUser.displayName || (googleUser.email ? googleUser.email.split('@')[0] : 'Aile Üyesi');
+
+      await setDoc(profileRef, {
+        uid: googleUser.uid,
+        displayName,
+        email: googleUser.email || '',
+        photoURL: googleUser.photoURL || '',
+        activeBudgetId: targetBudgetId,
+        updatedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      });
+
+      if (targetBudgetId && budgetInfo?.members) {
+        const updatedMembers = budgetInfo.members.map((m) =>
+          m.uid === googleUser.uid || m.uid === user?.uid
+            ? {
+                ...m,
+                uid: googleUser.uid,
+                name: displayName,
+                email: googleUser.email || '',
+                photoURL: googleUser.photoURL || ''
+              }
+            : m
+        );
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'budgets', targetBudgetId), {
+          members: updatedMembers
+        });
+      }
+
+      onNotify('Google hesabınız bağlandı! Verileriniz artık bulutta yedekleniyor.');
+    }
+  };
+
+  const handleGoogleConnect = async () => {
+    if (!firebaseEnabled || !auth) {
+      setPopupWarning(
+        'Önizleme penceresinde Google açılır penceresi kısıtlı olabilir, verileriniz bu cihazda güvenle saklanıyor. Dilerseniz aşağıdan yedek dosyası indirebilirsiniz.'
+      );
+      return;
+    }
+
+    setLoading(true);
+    setPopupWarning('');
+    const previousLocalBudgetId = activeBudgetId;
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+
+    try {
+      if (auth.currentUser && auth.currentUser.isAnonymous) {
+        try {
+          const result = await linkWithPopup(auth.currentUser, provider);
+          await syncGoogleUserToFirestore(result.user, previousLocalBudgetId);
+          onClose();
+          return;
+        } catch (linkErr) {
+          if (linkErr.code === 'auth/credential-already-in-use') {
+            const signInResult = await signInWithPopup(auth, provider);
+            await syncGoogleUserToFirestore(signInResult.user, previousLocalBudgetId);
+            onClose();
+            return;
+          }
+          throw linkErr;
+        }
+      } else {
+        const result = await signInWithPopup(auth, provider);
+        await syncGoogleUserToFirestore(result.user, previousLocalBudgetId);
+        onClose();
+      }
+    } catch (err) {
+      console.warn('Google giriş/bağlama uyarısı:', err?.code || err);
+      if (
+        err.code === 'auth/operation-not-supported-in-this-environment' ||
+        err.code === 'auth/unauthorized-domain' ||
+        err.code === 'auth/popup-blocked'
+      ) {
+        setPopupWarning(
+          'Önizleme penceresinde Google açılır penceresi kısıtlı olabilir, verileriniz bu cihazda güvenle saklanıyor. Aşağıdan E-posta ile giriş yapabilir veya tek tıkla yedek dosyası indirebilirsiniz.'
+        );
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        onNotify('Google giriş penceresi kapatıldı.', 'error');
+      } else {
+        setPopupWarning(
+          'Google bağlantısı şu an tamamlanamadı, ancak verileriniz bu cihazda güvenle saklanıyor.'
+        );
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEmailAuth = async (e) => {
+    e.preventDefault();
+    if (!firebaseEnabled || !auth) {
+      onNotify('Bulut servisi şu an çevrimdışı, verileriniz cihazda saklanıyor.', 'error');
+      return;
+    }
+    setLoading(true);
+    const previousLocalBudgetId = activeBudgetId;
+    try {
+      if (mode === 'register') {
+        const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
+        if (name.trim()) {
+          await updateProfile(cred.user, { displayName: name.trim() });
+        }
+        await syncGoogleUserToFirestore(cred.user, previousLocalBudgetId);
+      } else {
+        const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+        await syncGoogleUserToFirestore(cred.user, previousLocalBudgetId);
+      }
+      onClose();
+    } catch (err) {
+      let msg = 'Giriş işlemi başarısız oldu.';
+      if (err.code === 'auth/email-already-in-use') msg = 'Bu e-posta adresi zaten kayıtlı.';
+      else if (err.code === 'auth/weak-password') msg = 'Şifre en az 6 karakter olmalıdır.';
+      else if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password')
+        msg = 'E-posta veya şifre hatalı.';
+      onNotify(msg, 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setLoading(true);
+    try {
+      if (firebaseEnabled && auth) {
+        await signOut(auth);
+        await signInAnonymously(auth);
+      }
+      onNotify('Hesaptan çıkış yapıldı. Verileriniz bulutta ve cihazınızda güvende.');
+      onClose();
+    } catch {
+      onNotify('Çıkış yapılırken hata oluştu.', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-t-3xl sm:rounded-3xl max-w-md w-full p-6 shadow-2xl max-h-[90vh] overflow-y-auto space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-emerald-600" />
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+              Bulut Yedekleme & Hesap
+            </h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {!isAnonymous ? (
+          <div className="space-y-4">
+            <div className="p-4 rounded-2xl border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/70 dark:bg-emerald-500/10 flex items-center gap-3.5">
+              {user?.photoURL ? (
+                <img
+                  src={user.photoURL}
+                  alt={user.displayName || 'Profil'}
+                  className="w-12 h-12 rounded-full object-cover border-2 border-emerald-500 shrink-0"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-emerald-600 text-white font-bold text-lg flex items-center justify-center shrink-0">
+                  {(userProfile?.displayName || user?.displayName || 'K').charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="min-w-0">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold mb-1">
+                  <CheckCircle2 className="w-3 h-3" /> Google Yedekli
+                </span>
+                <p className="text-sm font-bold text-slate-900 dark:text-white truncate">
+                  {userProfile?.displayName || user?.displayName || 'Kayıtlı Kullanıcı'}
+                </p>
+                <p className="text-xs text-slate-600 dark:text-slate-300 truncate">
+                  {user?.email}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/70 dark:border-slate-700/70 space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 dark:text-slate-400">Yedekleme Durumu:</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                  Aktif (Bulutta Güvende)
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-500 dark:text-slate-400">Aktif Aile Bütçe Kodu:</span>
+                <span className="font-mono font-bold text-slate-900 dark:text-white bg-white dark:bg-slate-900 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700">
+                  {activeBudgetId}
+                </span>
+              </div>
+            </div>
+
+            <button
+              onClick={handleLogout}
+              disabled={loading}
+              className="w-full py-3 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>{loading ? 'Çıkış yapılıyor...' : 'Hesaptan Çıkış Yap'}</span>
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="p-3.5 rounded-2xl bg-sky-50 dark:bg-sky-500/10 border border-sky-200 dark:border-sky-500/30 space-y-1">
+              <div className="flex items-center gap-2 text-sky-800 dark:text-sky-300 font-bold text-xs">
+                <Smartphone className="w-4 h-4 shrink-0" />
+                <span>
+                  Durum: {cloudConnected ? 'Bulut Bağlı (Misafir)' : 'Cihazda Yedekli / Bulut Hazır'}
+                </span>
+              </div>
+              <p className="text-xs text-sky-900/80 dark:text-sky-200/80 leading-relaxed">
+                Telefon değiştiğinde bütçenizin otomatik geri yüklenmesi için{' '}
+                <strong>Google hesabınızı bağlayın</strong> veya aşağıdan yedek dosyası indirin.
+              </p>
+            </div>
+
+            {popupWarning && (
+              <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 text-xs text-amber-800 dark:text-amber-200 leading-relaxed">
+                {popupWarning}
+              </div>
+            )}
+
+            {/* GOOGLE HESABI BAĞLA BUTONU */}
+            <button
+              type="button"
+              onClick={handleGoogleConnect}
+              disabled={loading}
+              className="w-full py-3.5 px-4 rounded-2xl bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-750 text-slate-900 dark:text-white border-2 border-slate-200 dark:border-slate-700 shadow-md flex items-center justify-center gap-3 font-bold text-sm active:scale-[0.99] transition disabled:opacity-50"
+            >
+              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
+                <path
+                  fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 24c3.3 0 6.08-1.09 8.1-2.96l-3.88-3.05c-1.1.74-2.51 1.18-4.22 1.18-3.24 0-5.99-2.19-6.97-5.13H1.01v3.14C3.05 21.2 7.24 24 12 24Z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.03 14.04c-.25-.74-.39-1.54-.39-2.36 0-.82.14-1.62.39-2.36V6.18H1.01C.37 7.45 0 8.88 0 10.38s.37 2.93 1.01 4.2l4.02-3.14Z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 4.75c1.79 0 3.41.62 4.68 1.82l3.51-3.51C18.07 1.19 15.3 0 12 0 7.24 0 3.05 2.8 1.01 6.82l4.02 3.14c.98-2.94 3.73-5.21 6.97-5.21Z"
+                />
+              </svg>
+              <span>
+                {loading ? 'Google Bağlanıyor...' : 'Google Hesabı ile Giriş Yap / Yedekle'}
+              </span>
+            </button>
+
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
+              <span className="flex-shrink mx-3 text-[11px] text-slate-400">
+                veya e-posta ile devam et
+              </span>
+              <div className="flex-grow border-t border-slate-200 dark:border-slate-800" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 p-1 rounded-xl bg-slate-100 dark:bg-slate-800">
+              <button
+                type="button"
+                onClick={() => setMode('login')}
+                className={`py-2 rounded-lg text-xs font-bold ${
+                  mode === 'login'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-500'
+                }`}
+              >
+                Giriş Yap
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('register')}
+                className={`py-2 rounded-lg text-xs font-bold ${
+                  mode === 'register'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-500'
+                }`}
+              >
+                Yeni Hesap Oluştur
+              </button>
+            </div>
+
+            <form onSubmit={handleEmailAuth} className="space-y-2.5">
+              {mode === 'register' && (
+                <input
+                  type="text"
+                  required
+                  placeholder="Adınız Soyadınız"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm"
+                />
+              )}
+              <input
+                type="email"
+                required
+                placeholder="E-posta adresiniz"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm"
+              />
+              <input
+                type="password"
+                required
+                minLength={6}
+                placeholder="Şifreniz (en az 6 karakter)"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm"
+              />
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {mode === 'login' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
+                <span>{mode === 'login' ? 'E-posta ile Giriş Yap' : 'Kayıt Ol ve Yedekle'}</span>
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* EKSTRA GÜVENLİK: DOSYA YEDEĞİ DIŞA / İÇE AKTAR */}
+        <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+          <p className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+            Cihazlar Arası Dosya Yedeği (İnternetsiz Tam Güvenlik)
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={onExportBackup}
+              className="py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Yedeği İndir</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="py-2.5 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              <span>Yedekten Yükle</span>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(e) => {
+                onImportBackup(e.target.files?.[0]);
+                e.target.value = '';
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// ESKİ BULUT BÜTÇESİ İLE YENİ CİHAZ BÜTÇESİ ARASINDA SEÇİM MODALI
+// ============================================================================
+function BudgetRestoreConflictModal({
+  conflict,
+  onClose,
+  onChooseCloudBudget,
+  onKeepCurrentDeviceBudget
+}) {
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+        <div className="flex items-center gap-2.5">
+          <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 text-emerald-600 flex items-center justify-center shrink-0">
+            <Sparkles className="w-5 h-5" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">
+              Kayıtlı Bulut Bütçeniz Bulundu!
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {conflict.googleUser?.email}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+          Bu Google hesabında daha önceden yedeklenmiş bir bütçe kaydı bulundu. Hangisini
+          kullanmak istersiniz?
+        </p>
+
+        <div className="space-y-2.5">
+          <button
+            onClick={onChooseCloudBudget}
+            className="w-full p-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-left transition"
+          >
+            <span className="text-xs font-extrabold block">
+              1. Eski Telefonumdaki Bütçeyi Geri Yükle (Önerilen)
+            </span>
+            <span className="text-[11px] text-emerald-100 block mt-0.5">
+              Bulut Bütçe Kodu: <strong className="font-mono">{conflict.existingBudgetId}</strong>
+            </span>
+          </button>
+
+          <button
+            onClick={onKeepCurrentDeviceBudget}
+            className="w-full p-3.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-white text-left transition"
+          >
+            <span className="text-xs font-bold block">2. Bu Telefondaki Yeni Bütçeyi Yedekle</span>
+            <span className="text-[11px] text-slate-500 dark:text-slate-400 block mt-0.5">
+              Mevcut Cihaz Kodu:{' '}
+              <strong className="font-mono">{conflict.currentLocalBudgetId}</strong>
+            </span>
+          </button>
+        </div>
+
+        <button
+          onClick={onClose}
+          className="w-full py-2 text-xs font-semibold text-slate-400 hover:text-slate-600"
+        >
+          Daha Sonra Seç
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// ÖDEME TAMAMLAMA ONAY PENCERESİ
+// ============================================================================
+function PayBillConfirmModal({ bill, onClose, onConfirm }) {
+  const [recordAsExpense, setRecordAsExpense] = useState(true);
+  const [createNextRecurring, setCreateNextRecurring] = useState(Boolean(bill.recurring));
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl">
+        <h3 className="text-lg font-bold text-slate-900 dark:text-white">Ödemeyi Tamamla</h3>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          <strong className="text-slate-800 dark:text-slate-200">{bill.title}</strong> (
+          {formatCurrency(bill.amount)}) ödendi olarak işaretlenecek.
+        </p>
+
+        <div className="mt-4 space-y-3">
+          <label className="flex items-start gap-2.5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={recordAsExpense}
+              onChange={(e) => setRecordAsExpense(e.target.checked)}
+              className="mt-0.5 w-4 h-4 rounded text-emerald-600"
+            />
+            <span className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed">
+              Bu ödemeyi bugünün tarihine <strong>Gider</strong> olarak otomatik işle (Kalan
+              paradan düşülür).
+            </span>
+          </label>
+
+          {bill.recurring && (
+            <label className="flex items-start gap-2.5 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={createNextRecurring}
+                onChange={(e) => setCreateNextRecurring(e.target.checked)}
+                className="mt-0.5 w-4 h-4 rounded text-emerald-600"
+              />
+              <span className="text-xs text-slate-700 dark:text-slate-200 leading-relaxed">
+                Gelecek ay ({addOneMonthToDate(bill.dueDate).split('-').reverse().join('.')}) için
+                otomatik yeni ödeme kaydı oluştur.
+              </span>
+            </label>
+          )}
+        </div>
+
+        <div className="flex items-center gap-3 mt-6">
+          <button
+            onClick={onClose}
+            className="flex-1 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold"
+          >
+            Vazgeç
+          </button>
+          <button
+            onClick={() => onConfirm(bill, recordAsExpense, createNextRecurring)}
+            className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"
+          >
+            Onayla ve Bitir
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
